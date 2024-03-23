@@ -1,33 +1,31 @@
-# Jito Relayer
-Jito Relayer acts as a transaction processing unit (TPU) proxy for Solana validators.
-
-# Building
-```shell
-# pull submodules to get protobuffers required to connect to Block Engine and validator
-$ git submodule update -i -r
-# build from source
-$ cargo b --release
-```
-
-# Releases
-
-## Making a release
-
-We opt to use cargo workspaces for making releases.
-First, install cargo workspaces by running: `cargo install cargo-workspaces`.
-Next, check out the master branch of the jito-relayer repo and 
-ensure you're on the latest commit.
-In the master branch, run the following command and follow the instructions:
-```shell
-$ ./release
-```
-This will bump all the versions of the packages in your repo, 
-push to master and tag a new commit.
-
-## Running a release
-There are two options for running the relayer from releases:
-- Download the most recent release on the [releases](https://github.com/jito-foundation/jito-relayer/releases) page.
-- (Not recommended for production): One can download and run Docker containers from the Docker [registry](https://hub.docker.com/r/jitolabs/jito-transaction-relayer).
-
 # Running a Relayer
-See https://jito-foundation.gitbook.io/mev/jito-relayer/running-a-relayer for setup and usage instructions.
+
+## Setup
+
+See https://jito-foundation.gitbook.io/mev/jito-relayer/running-a-relayer until Section "RPC Server" for setup instructions.
+
+--> Create a new folder (e.g. "deez-relayer") and add your jito-relayer authentication files: public.pem, private.pem, keypair.json
+
+## Run
+
+The easiest way to run the Deez Relayer is to run our public docker image.
+
+Example run command with a deez-relayer at /home/ubuntu/deez-relayer authentication folder and a local RPC running:
+
+````shell
+sudo docker run -d -v /home/ubuntu/deez-relayer/:/home/ubuntu/deez-relayer \
+    --name=deez-relayer \
+    --restart=always \
+    --network=host \
+    --entrypoint=./jito-transaction-relayer deezlabs/deez-relayer:latest \
+    --rpc-servers="http://127.0.0.1:8899" \
+    --websocket-servers="ws://127.0.0.1:8900" \
+    --keypair-path=/home/ubuntu/deez-relayer/keypair.json \
+    --signing-key-pem-path=/home/ubuntu/deez-relayer/private.pem \
+    --verifying-key-pem-path=/home/ubuntu/deez-relayer/public.pem \
+    --block-engine-url=https://amsterdam.mainnet.block-engine.jito.wtf \
+    --deez-engine-url=<redacted> \
+    --packet-delay-ms=200 \
+    --public-ip 178.0.0.0
+```
+````
