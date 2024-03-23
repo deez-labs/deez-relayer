@@ -110,6 +110,8 @@ impl DeezEngineRelayerHandler {
 
             trace!("received deez engine batches");
 
+            let deez_engine_url_clone = deez_engine_url.clone();
+
             tokio::spawn(async move {
                 let client = reqwest::Client::new();
                 for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
@@ -126,7 +128,7 @@ impl DeezEngineRelayerHandler {
             
                             let encoded_tx_data = base64::encode(tx_data);
             
-                            let res = client.post(deez_engine_url)
+                            let res = client.post(&deez_engine_url_clone)
                                 .body(encoded_tx_data)
                                 .send()
                                 .await; // Here we await the response
