@@ -12,7 +12,7 @@ The easiest way to run the Deez Relayer is to run our public docker image.
 
 Example run command with a deez-relayer at /home/ubuntu/deez-relayer authentication folder and a local RPC running:
 
-````shell
+```shell
 sudo docker run -d -v /home/ubuntu/deez-relayer/:/home/ubuntu/deez-relayer \
     --name=deez-relayer \
     --restart=always \
@@ -28,4 +28,3 @@ sudo docker run -d -v /home/ubuntu/deez-relayer/:/home/ubuntu/deez-relayer \
     --packet-delay-ms=200 \
     --public-ip 178.0.0.0
 ```
-````
