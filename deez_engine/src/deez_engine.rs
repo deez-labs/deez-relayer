@@ -128,7 +128,9 @@ impl DeezEngineRelayerHandler {
             
                             let encoded_tx_data = base64::encode(tx_data);
             
-                            let res = client.post(&deez_engine_url_clone)
+                            let full_url = format!("{}/mempool/tx", &deez_engine_url_clone);
+
+                            let res = client.post(&full_url)
                                 .body(encoded_tx_data)
                                 .send()
                                 .await; // Here we await the response
