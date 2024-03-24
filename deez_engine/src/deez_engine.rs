@@ -7,7 +7,6 @@ use std::{
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant, SystemTime},
-    net::TcpStream,
     io::{self, Write}
 };
 
@@ -43,6 +42,7 @@ use tokio::{
     select,
     sync::mpsc::{channel, Receiver, Sender},
     time::{interval, sleep},
+    net::TcpStream,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
@@ -99,7 +99,7 @@ impl DeezEngineRelayerHandler {
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
         deez_engine_url: String,
     ) -> io::Result<()> {
-        let mut stream = TcpStream::connect(deez_engine_url)?;
+        let mut stream = TcpStream::connect(deez_engine_url).await?;
 
         Self::start_event_loop(deez_engine_receiver, deez_engine_url).await
     }
@@ -109,8 +109,9 @@ impl DeezEngineRelayerHandler {
         deez_stream: TcpStream,
     ) -> io::Result<()> {
         loop {
-            let deez_engine_batches = 
-                deez_engine_receiver.recv().await.ok_or_else(|| DeezEngineError::DeezEngineFailure("deez engine packet receiver disconnected".to_string()))?;
+            let deez_engine_batches = deez_engine_receiver.recv().await.ok_or_else(|| 
+                io::Error::new(io::ErrorKind::Other, "deez engine packet receiver disconnected")
+            )?;
 
             trace!("received deez engine batches");
 
@@ -126,7 +127,7 @@ impl DeezEngineRelayerHandler {
                             Err(_) => continue, // Handle serialization error or log it as needed
                         };
 
-                        stream.write_all(tx_data)?;
+                        stream.write_all(&tx_data).await?;
                     }
                 }
             }
