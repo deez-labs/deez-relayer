@@ -98,7 +98,7 @@ impl DeezEngineRelayerHandler {
     async fn connect(
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
         deez_engine_url: String,
-    ) -> Result<()> {
+    ) -> DeezEngineResult<()> {
         let mut stream = TcpStream::connect(deez_engine_url)?;
 
         Self::start_event_loop(deez_engine_receiver, deez_engine_url).await
@@ -107,8 +107,8 @@ impl DeezEngineRelayerHandler {
     async fn start_event_loop(
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
         deez_stream: TcpStream,
-    ) -> Result<()> {
-        loop {
+    ) -> DeezEngineResult<()> {
+        while true {
             let deez_engine_batches = 
                 deez_engine_receiver.recv().await.ok_or_else(|| DeezEngineError::DeezEngineFailure("deez engine packet receiver disconnected".to_string()))?;
 
