@@ -127,7 +127,7 @@ impl DeezEngineRelayerHandler {
                             Err(_) => continue, // Handle serialization error or log it as needed
                         };
 
-                        deez_stream.write_all(&tx_data).await?;
+                        stream.write_all(&tx_data).await?;
                     }
                 }
             }
