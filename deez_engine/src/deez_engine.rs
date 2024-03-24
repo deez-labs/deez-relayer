@@ -107,7 +107,7 @@ impl DeezEngineRelayerHandler {
 
     async fn start_event_loop(
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
-        deez_stream: TcpStream,
+        deez_stream: &mut TcpStream,
     ) -> io::Result<()> {
         loop {
             let deez_engine_batches = deez_engine_receiver.recv().await.ok_or_else(|| 
