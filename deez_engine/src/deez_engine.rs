@@ -43,6 +43,7 @@ use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     time::{interval, sleep},
     net::TcpStream,
+    io::AsyncWriteExt,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
@@ -101,7 +102,7 @@ impl DeezEngineRelayerHandler {
     ) -> io::Result<()> {
         let mut stream = TcpStream::connect(deez_engine_url).await?;
 
-        Self::start_event_loop(deez_engine_receiver, deez_engine_url).await
+        Self::start_event_loop(deez_engine_receiver, stream).await
     }
 
     async fn start_event_loop(
