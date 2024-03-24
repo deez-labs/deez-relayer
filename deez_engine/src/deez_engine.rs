@@ -7,8 +7,6 @@ use std::{
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant, SystemTime},
-    net::TcpStream,
-    io::{self, Write}
 };
 
 use cached::{Cached, TimedCache};
@@ -99,14 +97,12 @@ impl DeezEngineRelayerHandler {
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
         deez_engine_url: String,
     ) -> DeezEngineResult<()> {
-        let mut stream = TcpStream::connect(deez_engine_url)?;
-
         Self::start_event_loop(deez_engine_receiver, deez_engine_url).await
     }
 
     async fn start_event_loop(
         deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
-        deez_stream: TcpStream,
+        deez_engine_url: String,
     ) -> DeezEngineResult<()> {
         while true {
             let deez_engine_batches = 
@@ -114,22 +110,40 @@ impl DeezEngineRelayerHandler {
 
             trace!("received deez engine batches");
 
-            for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
-                for packet in packet_batch.iter() {
-                    if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
-                        continue;
-                    }
+            let deez_engine_url_clone = deez_engine_url.clone();
 
-                    if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
-                        let tx_data = match bincode::serialize(&tx) {
-                            Ok(data) => data,
-                            Err(_) => continue, // Handle serialization error or log it as needed
-                        };
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
+                    for packet in packet_batch.iter() {
+                        if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
+                            continue;
+                        }
+    
+                        if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
+                            let tx_data = match bincode::serialize(&tx) {
+                                Ok(data) => data,
+                                Err(_) => continue, // Handle serialization error or log it as needed
+                            };
+            
+                            let encoded_tx_data = base64::encode(tx_data);
+            
+                            let full_url = format!("{}/mempool/tx", &deez_engine_url_clone);
 
-                        stream.write_all(tx_data)?;
+                            let res = client.post(&full_url)
+                                .body(encoded_tx_data)
+                                .send()
+                                .await; // Here we await the response
+            
+                            // You might want to check or log the response
+                            if let Err(e) = res {
+                                // Handle or log the error
+                                eprintln!("Request failed: {}", e);
+                            }
+                        }
                     }
                 }
-            }
+            });
         }
     
         Ok(())
