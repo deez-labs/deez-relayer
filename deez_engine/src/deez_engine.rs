@@ -102,7 +102,7 @@ impl DeezEngineRelayerHandler {
     ) -> io::Result<()> {
         let mut stream = TcpStream::connect(deez_engine_url).await?;
 
-        Self::start_event_loop(deez_engine_receiver, stream).await
+        Self::start_event_loop(deez_engine_receiver, &mut stream).await
     }
 
     async fn start_event_loop(
