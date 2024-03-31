@@ -39,7 +39,7 @@ use thiserror::Error;
 use tokio::{
     runtime::Runtime,
     select,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{mpsc::{channel, Sender}, broadcast::Receiver},
     time::{interval, sleep},
 };
 use tokio_stream::wrappers::ReceiverStream;
@@ -80,6 +80,7 @@ impl Interceptor for AuthInterceptor {
     }
 }
 
+#[derive(Clone)]
 pub struct BlockEnginePackets {
     pub banking_packet_batch: BankingPacketBatch,
     pub stamp: SystemTime,
@@ -425,9 +426,7 @@ impl BlockEngineRelayerHandler {
                 }
                 block_engine_batches = block_engine_receiver.recv() => {
                     trace!("received block engine batches");
-                    let block_engine_batches = block_engine_batches
-                        .ok_or_else(|| BlockEngineError::BlockEngineFailure("block engine packet receiver disconnected".to_string()))?;
-
+                    let block_engine_batches = block_engine_batches.map_err(|_| BlockEngineError::BlockEngineFailure("block engine packet receiver disconnected".to_string()))?;
                     let now = Instant::now();
 
                     // note: this contains discarded packets too

@@ -1448,6 +1448,7 @@ dependencies = [
  "bincode",
  "cached",
  "dashmap 5.5.3",
+ "jito-block-engine",
  "jito-core",
  "jito-protos",
  "log",

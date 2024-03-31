@@ -1,70 +1,38 @@
 use std::{
-    collections::HashSet,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    io,
+    sync::Arc,
     thread::{Builder, JoinHandle},
-    time::{Duration, Instant, SystemTime},
+    time::Duration,
 };
 
-use cached::{Cached, TimedCache};
-use dashmap::DashMap;
-use jito_core::ofac::is_tx_ofac_related;
-use jito_protos::{
-    auth::{
-        auth_service_client::AuthServiceClient, GenerateAuthChallengeRequest,
-        GenerateAuthTokensRequest, GenerateAuthTokensResponse, RefreshAccessTokenRequest, Role,
-        Token,
-    },
-    block_engine::{
-        block_engine_relayer_client::BlockEngineRelayerClient, packet_batch_update::Msg,
-        AccountsOfInterestRequest, AccountsOfInterestUpdate, ExpiringPacketBatch,
-        PacketBatchUpdate, ProgramsOfInterestRequest, ProgramsOfInterestUpdate,
-    },
-    convert::packet_to_proto_packet,
-    packet::PacketBatch as ProtoPacketBatch,
-    shared::{Header, Heartbeat},
-};
-use log::{error, *};
-use prost_types::Timestamp;
-use solana_core::banking_trace::BankingPacketBatch;
-use solana_metrics::{datapoint_error, datapoint_info};
-use solana_sdk::{
-    address_lookup_table::AddressLookupTableAccount, pubkey::Pubkey, signature::Signer,
-    signer::keypair::Keypair, transaction::VersionedTransaction,
-};
+use jito_block_engine::block_engine::BlockEnginePackets;
+use log::*;
+use solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
     runtime::Runtime,
     select,
-    sync::mpsc::{channel, Receiver, Sender},
-    time::{interval, sleep},
-};
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::{
-    codegen::InterceptedService,
-    service::Interceptor,
-    transport::{Channel, Endpoint},
-    Response, Status, Streaming,
+    sync::{broadcast::Receiver, Mutex},
+    time::{interval, sleep, timeout},
 };
 
-pub struct DeezEnginePackets {
-    pub banking_packet_batch: BankingPacketBatch,
-}
+const HEARTBEAT_MSG: &[u8; 4] = b"ping";
 
 #[derive(Error, Debug)]
 pub enum DeezEngineError {
-    #[error("auth service failed: {0}")]
-    AuthServiceFailure(String),
-
     #[error("deez engine failed: {0}")]
-    DeezEngineFailure(String),
+    Engine(String),
+
+    #[error("deez tcp stream failure: {0}")]
+    TcpStream(#[from] io::Error),
+
+    #[error("deez tcp connection timed out")]
+    TcpConnectionTmieout(#[from] tokio::time::error::Elapsed),
 }
 
 pub type DeezEngineResult<T> = Result<T, DeezEngineError>;
-
 
 pub struct DeezEngineRelayerHandler {
     deez_engine_forwarder: JoinHandle<()>,
@@ -72,7 +40,7 @@ pub struct DeezEngineRelayerHandler {
 
 impl DeezEngineRelayerHandler {
     pub fn new(
-        mut deez_engine_receiver: Receiver<DeezEnginePackets>,
+        mut deez_engine_receiver: Receiver<BlockEnginePackets>,
         deez_engine_url: String,
     ) -> DeezEngineRelayerHandler {
         let deez_engine_forwarder = Builder::new()
@@ -80,77 +48,107 @@ impl DeezEngineRelayerHandler {
             .spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let result = Self::connect(
-                        &mut deez_engine_receiver,
-                        deez_engine_url,
-                    ).await;
+                    loop {
+                        let result = Self::connect(
+                            &mut deez_engine_receiver,
+                            &deez_engine_url,
+                        )
+                        .await;
+
+                        if let Err(e) = result {
+                            error!("error with deez engine connection, attempting to re-establish connection: {:?}", e);
+                            sleep(Duration::from_secs(2)).await;
+                        }
+                    }
                 })
             })
             .unwrap();
 
-        DeezEngineRelayerHandler{
+        DeezEngineRelayerHandler {
             deez_engine_forwarder,
         }
     }
 
     async fn connect(
-        deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
-        deez_engine_url: String,
+        deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
+        deez_engine_url: &str,
     ) -> DeezEngineResult<()> {
-        Self::start_event_loop(deez_engine_receiver, deez_engine_url).await
+        let engine_stream = Self::connect_to_engine(deez_engine_url).await?;
+        Self::start_event_loop(deez_engine_receiver, engine_stream).await
     }
 
     async fn start_event_loop(
-        deez_engine_receiver: &mut Receiver<DeezEnginePackets>,
-        deez_engine_url: String,
+        deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
+        deez_engine_stream: TcpStream,
     ) -> DeezEngineResult<()> {
-        while true {
-            let deez_engine_batches = 
-                deez_engine_receiver.recv().await.ok_or_else(|| DeezEngineError::DeezEngineFailure("deez engine packet receiver disconnected".to_string()))?;
+        let forwarder = Arc::new(Mutex::new(deez_engine_stream));
+        let mut heartbeat_interval = interval(Duration::from_secs(5));
 
-            trace!("received deez engine batches");
+        loop {
+            let cloned_forwarder = forwarder.clone();
 
-            let deez_engine_url_clone = deez_engine_url.clone();
+            select! {
+                deez_engine_batches = deez_engine_receiver.recv() => {
+                    let deez_engine_batches = deez_engine_batches.map_err(|_| DeezEngineError::Engine("block engine packet receiver disconnected".to_string()))?;
+                    trace!("received deez engine batches");
+                    // cloning is fine, it's an Arc!
 
-            tokio::spawn(async move {
-                let client = reqwest::Client::new();
-                for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
-                    for packet in packet_batch.iter() {
-                        if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
-                            continue;
-                        }
-    
-                        if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
-                            let tx_data = match bincode::serialize(&tx) {
-                                Ok(data) => data,
-                                Err(_) => continue, // Handle serialization error or log it as needed
-                            };
-            
-                            let encoded_tx_data = base64::encode(tx_data);
-            
-                            let full_url = format!("{}/mempool/tx", &deez_engine_url_clone);
+                    tokio::spawn(async move {
+                        for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
+                            for packet in packet_batch {
+                                if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
+                                    continue;
+                                }
 
-                            let res = client.post(&full_url)
-                                .body(encoded_tx_data)
-                                .send()
-                                .await; // Here we await the response
-            
-                            // You might want to check or log the response
-                            if let Err(e) = res {
-                                // Handle or log the error
-                                eprintln!("Request failed: {}", e);
+                                if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
+                                    let tx_data = match bincode::serialize(&tx) {
+                                        Ok(data) => data,
+                                        Err(_) => continue, // Handle serialization error or log it as needed
+                                    };
+
+                                    if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), &tx_data).await {
+                                        error!("failed to forward packets to deez engine: {e}");
+                                    } else {
+                                        info!("succesfully relayed packets");
+                                    }
+
+                                }
                             }
-                        }
-                    }
+                        };
+                    });
                 }
-            });
+                _ = heartbeat_interval.tick() => {
+                    info!("sending heartbeat (deez)");
+                    Self::forward_packets(cloned_forwarder.clone(), HEARTBEAT_MSG).await?;
+                }
+
+            }
         }
-    
-        Ok(())
+    }
+
+    pub async fn connect_to_engine(engine_url: &str) -> DeezEngineResult<TcpStream> {
+        let stream_future = TcpStream::connect(engine_url);
+
+        let stream = timeout(Duration::from_secs(10), stream_future).await??;
+
+        if let Err(e) = stream.set_nodelay(true) {
+            warn!(
+                "TcpStream NAGLE disable failed ({e:?}) - packet delivery will be slightly delayed"
+            )
+        }
+
+        info!("successfully connected to deez tcp engine!");
+        Ok(stream)
+    }
+
+    pub async fn forward_packets(
+        stream: Arc<Mutex<TcpStream>>,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
+        stream.lock().await.write_all(data).await
     }
 
     pub fn join(self) {
         self.deez_engine_forwarder.join().unwrap();
     }
-
 }

@@ -25,6 +25,7 @@ solana-metrics = { workspace = true }
 solana-perf = { workspace = true }
 solana-sdk = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
+jito-block-engine = { workspace = true }

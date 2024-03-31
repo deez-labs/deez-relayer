@@ -8,16 +8,11 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use solana_client::rpc_client::SerializableTransaction;
-use solana_sdk::transaction::VersionedTransaction;
-
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use jito_block_engine::block_engine::BlockEnginePackets;
-use deez_engine::deez_engine::DeezEnginePackets;
 use jito_relayer::relayer::RelayerPacketBatches;
 use solana_core::banking_trace::BankingPacketBatch;
 use solana_metrics::datapoint_info;
-use tokio::sync::mpsc::error::TrySendError;
 
 pub const BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY: usize = 5_000;
 /// Forwards packets to the Block Engine handler thread.
@@ -26,8 +21,7 @@ pub fn start_forward_and_delay_thread(
     verified_receiver: Receiver<BankingPacketBatch>,
     delay_packet_sender: Sender<RelayerPacketBatches>,
     packet_delay_ms: u32,
-    block_engine_sender: tokio::sync::mpsc::Sender<BlockEnginePackets>,
-    deez_engine_sender: tokio::sync::mpsc::Sender<DeezEnginePackets>,
+    block_engine_sender: tokio::sync::broadcast::Sender<BlockEnginePackets>,
     num_threads: u64,
     disable_mempool: bool,
     exit: &Arc<AtomicBool>,
@@ -39,8 +33,7 @@ pub fn start_forward_and_delay_thread(
         .map(|thread_id| {
             let verified_receiver = verified_receiver.clone();
             let delay_packet_sender = delay_packet_sender.clone();
-            let block_engine_sender = block_engine_sender.clone();
-            let deez_engine_sender = deez_engine_sender.clone();
+            let engine_sender = block_engine_sender.clone(); // Renamed to "engine_sender" as it sends to both deez and block engine
 
             let exit = exit.clone();
             Builder::new()
@@ -53,7 +46,7 @@ pub fn start_forward_and_delay_thread(
                     let mut forwarder_metrics = ForwarderMetrics::new(
                         buffered_packet_batches.capacity(),
                         verified_receiver.capacity().unwrap_or_default(), // TODO (LB): unbounded channel now, remove metric
-                        block_engine_sender.capacity(),
+                        0, // set to 0 as broadcast doesn't have capacity method
                     );
                     let mut last_metrics_upload = Instant::now();
 
@@ -64,7 +57,7 @@ pub fn start_forward_and_delay_thread(
                             forwarder_metrics = ForwarderMetrics::new(
                                 buffered_packet_batches.capacity(),
                                 verified_receiver.capacity().unwrap_or_default(), // TODO (LB): unbounded channel now, remove metric
-                                block_engine_sender.capacity(),
+                                0, // set to 0 as broadcast doesn't have capacity method
                             );
                             last_metrics_upload = Instant::now();
                         }
@@ -84,41 +77,8 @@ pub fn start_forward_and_delay_thread(
                                 // try_send because the block engine receiver only drains when it's connected
                                 // and we don't want to OOM on packet_receiver
                                 if !disable_mempool {
-                                    let banking_packet_batch_clone_for_request = banking_packet_batch.clone();
-                                    deez_engine_sender.try_send(DeezEnginePackets{
-                                        banking_packet_batch: banking_packet_batch_clone_for_request,
-                                    });
-
-                                    /*
-                                    std::thread::spawn(move || {
-                                        let client = reqwest::blocking::Client::new();
-                                        let url = "http://127.0.0.1:8372/mempool/tx";
-                                        for packet_batch in banking_packet_batch_clone_for_request.0.iter() {
-                                            for packet in packet_batch.iter() {
-                                                if packet.meta().discard() {
-                                                    continue;
-                                                }
-                                                if packet.meta().is_simple_vote_tx() {
-                                                    continue
-                                                }
-    
-                                                if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
-                                                    let tx_data = bincode::serialize(&tx).unwrap();
-    
-                                                    let encoded_tx_data: String = base64::encode(tx_data);
-    
-                                                    let res: Result<reqwest::blocking::Response, reqwest::Error> = client.post(url)
-                                                        .body(encoded_tx_data)
-                                                        .send();
-                                                }
-                                            }
-                                        }
-                                    });
-                                    */
-
-
                                     let banking_packet_batch_clone_for_send = banking_packet_batch.clone();
-                                    match block_engine_sender.try_send(BlockEnginePackets {
+                                    match engine_sender.send(BlockEnginePackets {
                                         banking_packet_batch: banking_packet_batch_clone_for_send,
                                         stamp: system_time,
                                         expiration: packet_delay_ms,
@@ -127,13 +87,8 @@ pub fn start_forward_and_delay_thread(
                                             forwarder_metrics.num_be_packets_forwarded +=
                                                 num_packets;
                                         }
-                                        Err(TrySendError::Closed(_)) => {
-                                            panic!(
-                                                "error sending packet batch to block engine handler"
-                                            );
-                                        }
-                                        Err(TrySendError::Full(_)) => {
-                                            // block engine most likely not connected
+                                        Err(_) => {
+                                            // block engine most likely not connected - any broadcaster error means channel closed
                                             forwarder_metrics.num_be_packets_dropped += num_packets;
                                             forwarder_metrics.num_be_sender_full += 1;
                                         }
@@ -173,7 +128,7 @@ pub fn start_forward_and_delay_thread(
                             buffered_packet_batches.len(),
                             buffered_packet_batches.capacity(),
                             verified_receiver.len(),
-                            BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY - block_engine_sender.capacity(),
+                            BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY - engine_sender.len(),
                         );
                     }
                 })

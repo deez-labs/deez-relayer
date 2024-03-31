@@ -35,7 +35,7 @@ use jito_relayer::{
 };
 use jito_relayer_web::{start_relayer_web_server, RelayerState};
 use jito_rpc::load_balancer::LoadBalancer;
-use jito_transaction_relayer::forwarder::start_forward_and_delay_thread;
+use jito_transaction_relayer::forwarder::{start_forward_and_delay_thread, BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY};
 use jwt::{AlgorithmType, PKeyWithDigest};
 use log::{debug, error, info, warn};
 use openssl::{hash::MessageDigest, pkey::PKey};
@@ -48,7 +48,7 @@ use solana_sdk::{
     signature::{read_keypair_file, Signer},
 };
 use tikv_jemallocator::Jemalloc;
-use tokio::{runtime::Builder, signal, sync::mpsc::channel};
+use tokio::{runtime::Builder, signal, sync::broadcast::channel};
 use tonic::transport::Server;
 
 // no-op change to test ci
@@ -124,7 +124,7 @@ struct Args {
 
     // Address for Deez Engine
     #[arg(long, env)]
-    deez_engine_url: Option<String>,
+    deez_engine_url: String,
 
     /// Manual override for authentication service address of the block-engine.
     /// Defaults to `--block-engine-url`
@@ -256,12 +256,6 @@ fn main() {
     let args: Args = Args::parse();
     info!("args: {:?}", args);
 
-    if !args.deez_engine_url.is_some() {
-        panic!(
-            "deez_engine_url not set",
-        )
-    }
-
     // Warn about deprecated args
     if args.cluster.is_some() {
         warn!("--cluster arg is deprecated and may be removed in the next release.")
@@ -369,19 +363,17 @@ fn main() {
     // with packets when the block engine isn't connected
     // tracked as forwarder_metrics.block_engine_sender_len
     let (block_engine_sender, block_engine_receiver) =
-        channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
+        channel(BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
+        // channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
 
-    let (deez_engine_sender, deez_engine_receiver) =
-        channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
 
-    //let (deez_engine_sender, deez_engine_receiver) = channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
+    let deez_engine_receiver = block_engine_sender.subscribe();
 
     let forward_and_delay_threads = start_forward_and_delay_thread(
         verified_receiver,
         delay_packet_sender,
         args.packet_delay_ms,
         block_engine_sender,
-        deez_engine_sender,
         1,
         args.disable_mempool,
         &exit,
@@ -411,9 +403,10 @@ fn main() {
         &is_connected_to_block_engine,
         ofac_addresses.clone(),
     );
+
     let deez_engine_forwarder = DeezEngineRelayerHandler::new(
         deez_engine_receiver,
-        args.deez_engine_url.unwrap(),
+        args.deez_engine_url,
     );
 
     // receiver tracked as relayer_metrics.slot_receiver_len
