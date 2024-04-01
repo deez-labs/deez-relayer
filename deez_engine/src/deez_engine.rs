@@ -18,7 +18,8 @@ use tokio::{
     time::{interval, sleep, timeout},
 };
 
-const HEARTBEAT_MSG: &[u8; 4] = b"ping";
+const DELIMITER: u8 = b"\n";
+const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
 
 #[derive(Error, Debug)]
 pub enum DeezEngineError {
@@ -105,13 +106,16 @@ impl DeezEngineRelayerHandler {
                                                 Ok(data) => data,
                                                 Err(_) => continue, // Handle serialization error or log it as needed
                                             };
-        
-                                            if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), &tx_data).await {
+
+                                            let base64_encoded_tx = base64::encode(tx_data);
+
+                                            let delimited_tx_data = format!("{}\n", base64_encoded_tx);
+
+                                            if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), delimited_tx_data.as_bytes()).await {
                                                 error!("failed to forward packets to deez engine: {e}");
                                             } else {
                                                 info!("succesfully relayed packets");
                                             }
-        
                                         }
                                     }
                                 };
@@ -120,12 +124,9 @@ impl DeezEngineRelayerHandler {
                         Err(e) => match e {
                             tokio::sync::broadcast::error::RecvError::Lagged(n) => {
                                 warn!("Receiver lagged by {n} messages, continuing to receive future messages.");
-                                // Optionally handle the situation, e.g., logging, metrics.
-                                // No need to reconnect or re-subscribe explicitly.
                             }
                             tokio::sync::broadcast::error::RecvError::Closed => {
                                 return Err(DeezEngineError::Engine("broadcast channel closed".to_string()));
-                                // Or handle the closed channel according to your application's needs
                             }
                         },
                     }
