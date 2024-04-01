@@ -18,7 +18,7 @@ use tokio::{
     time::{interval, sleep, timeout},
 };
 
-const DELIMITER: u8 = b"\n";
+const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
 
 #[derive(Error, Debug)]
