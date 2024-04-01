@@ -152,7 +152,8 @@ impl DeezEngineRelayerHandler {
 
     pub async fn find_closest_engine() -> DeezEngineResult<String> {
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5));
+            .timeout(Duration::from_secs(5))
+            .build()?;
         
         let mut closest_engine = String::new();
         let mut shortest_time = Duration::from_secs(u64::MAX);
