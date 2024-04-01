@@ -7,6 +7,7 @@ use std::{
 
 use jito_block_engine::block_engine::BlockEnginePackets;
 use log::*;
+use reqwest::Error as ReqwestError;
 use solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 use tokio::{
@@ -17,12 +18,11 @@ use tokio::{
     sync::{broadcast::Receiver, Mutex},
     time::{interval, sleep, timeout},
 };
-use reqwest::Error as ReqwestError;
 
 const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
 const DEEZ_ENGINE_URLS: [&str; 5] = [
-    "nyc.engine.deez.wtf",
+    "ny.engine.deez.wtf",
     "utah.engine.deez.wtf",
     "amsterdam.engine.deez.wtf",
     "london.engine.deez.wtf",
@@ -54,9 +54,7 @@ pub struct DeezEngineRelayerHandler {
 }
 
 impl DeezEngineRelayerHandler {
-    pub fn new(
-        mut deez_engine_receiver: Receiver<BlockEnginePackets>,
-    ) -> DeezEngineRelayerHandler {
+    pub fn new(mut deez_engine_receiver: Receiver<BlockEnginePackets>) -> DeezEngineRelayerHandler {
         let deez_engine_forwarder = Builder::new()
             .name("deez_engine_relayer_handler_thread".into())
             .spawn(move || {
@@ -113,7 +111,7 @@ impl DeezEngineRelayerHandler {
                                         if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
                                             continue;
                                         }
-        
+
                                         if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
                                             let tx_data = match bincode::serialize(&tx) {
                                                 Ok(data) => data,
@@ -158,13 +156,16 @@ impl DeezEngineRelayerHandler {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
-        
+
         let mut closest_engine = String::new();
         let mut shortest_time = Duration::from_secs(u64::MAX);
 
         for &url in DEEZ_ENGINE_URLS.iter() {
             let start = Instant::now();
-            let result = client.get(format!("http://{}:8372/mempool/health", url)).send().await;
+            let result = client
+                .get(format!("http://{}:8372/mempool/health", url))
+                .send()
+                .await;
 
             match result {
                 Ok(_response) => {
@@ -173,16 +174,18 @@ impl DeezEngineRelayerHandler {
                         shortest_time = elapsed;
                         closest_engine = url.to_string();
                     }
-                },
+                }
                 Err(_e) => {
                     info!("error connecting to {}", url)
                     // ignore for now
-                },
+                }
             }
         }
 
         if closest_engine.is_empty() {
-            return Err(DeezEngineError::CannotFindEngine("could not connect to any engine.".to_string()));
+            return Err(DeezEngineError::CannotFindEngine(
+                "could not connect to any engine.".to_string(),
+            ));
         } else {
             Ok(format!("{}:8373", closest_engine))
         }
