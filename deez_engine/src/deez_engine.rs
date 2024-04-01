@@ -2,7 +2,7 @@ use std::{
     io,
     sync::Arc,
     thread::{Builder, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use jito_block_engine::block_engine::BlockEnginePackets;
@@ -82,7 +82,7 @@ impl DeezEngineRelayerHandler {
         deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
     ) -> DeezEngineResult<()> {
         let deez_engine_url = Self::find_closest_engine().await?;
-        info!(format!("determined closest engine as {}", deez_engine_url));
+        info!("determined closest engine as {}", deez_engine_url);
         let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
         Self::start_event_loop(deez_engine_receiver, engine_stream).await
     }
@@ -170,7 +170,7 @@ impl DeezEngineRelayerHandler {
                     }
                 },
                 Err(_e) => {
-                    info!(format!("error connecting to {}", url))
+                    info!("error connecting to {}", url)
                     // ignore for now
                 },
             }
