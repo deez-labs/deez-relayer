@@ -184,7 +184,7 @@ impl DeezEngineRelayerHandler {
         if closest_engine.is_empty() {
             return Err(DeezEngineError::CannotFindEngine("could not connect to any engine.".to_string()));
         } else {
-            Ok(format!("{}:8373"))
+            Ok(format!("{}:8373", closest_engine))
         }
     }
 
