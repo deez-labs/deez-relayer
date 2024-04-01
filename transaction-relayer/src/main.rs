@@ -122,6 +122,9 @@ struct Args {
     #[arg(long, env)]
     block_engine_url: Option<String>,
 
+    #[arg(long, env)]
+    deez_engine_url: Option<String>,
+
     /// Manual override for authentication service address of the block-engine.
     /// Defaults to `--block-engine-url`
     #[arg(long, env)]
