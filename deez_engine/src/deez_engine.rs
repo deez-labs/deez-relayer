@@ -21,12 +21,12 @@ use reqwest::Error as ReqwestError;
 
 const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
-const DEEZ_ENGINE_URLS: [String; 5] = [
-    "nyc.engine.deez.wtf".to_string(),
-    "utah.engine.deez.wtf".to_string(),
-    "amsterdam.engine.deez.wtf".to_string(),
-    "london.engine.deez.wtf".to_string(),
-    "tokyo.engine.deez.wtf".to_string(),
+const DEEZ_ENGINE_URLS: [&str; 5] = [
+    "nyc.engine.deez.wtf",
+    "utah.engine.deez.wtf",
+    "amsterdam.engine.deez.wtf",
+    "london.engine.deez.wtf",
+    "tokyo.engine.deez.wtf",
 ];
 
 #[derive(Error, Debug)]
