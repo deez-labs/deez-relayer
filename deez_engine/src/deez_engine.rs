@@ -92,7 +92,7 @@ impl DeezEngineRelayerHandler {
                 recv_result = deez_engine_receiver.recv() => {
                     match recv_result {
                         Ok(deez_engine_batches) => {
-                            trace!("received deez engine batches");
+                            //trace!("received deez engine batches");
                             // Proceed with handling the batches as before
                             tokio::spawn(async move {
                                 for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
@@ -114,7 +114,7 @@ impl DeezEngineRelayerHandler {
                                             if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), delimited_tx_data.as_bytes()).await {
                                                 error!("failed to forward packets to deez engine: {e}");
                                             } else {
-                                                info!("succesfully relayed packets");
+                                                //trace!("succesfully relayed packets");
                                             }
                                         }
                                     }
