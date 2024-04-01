@@ -17,6 +17,7 @@ use tokio::{
     sync::{broadcast::Receiver, Mutex},
     time::{interval, sleep, timeout},
 };
+use reqwest::Error as ReqwestError;
 
 const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
