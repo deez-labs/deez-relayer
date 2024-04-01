@@ -20,6 +20,13 @@ use tokio::{
 
 const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
+const DEEZ_ENGINE_URLS: &[String; 5] = [
+    "nyc.engine.deez.wtf",
+    "utah.engine.deez.wtf",
+    "amsterdam.engine.deez.wtf",
+    "london.engine.deez.wtf",
+    "tokyo.engine.deez.wtf"
+];
 
 #[derive(Error, Debug)]
 pub enum DeezEngineError {
@@ -31,6 +38,9 @@ pub enum DeezEngineError {
 
     #[error("deez tcp connection timed out")]
     TcpConnectionTmieout(#[from] tokio::time::error::Elapsed),
+
+    #[error("cannot find closest engine")]
+    CannotFindEngine(String)
 }
 
 pub type DeezEngineResult<T> = Result<T, DeezEngineError>;
@@ -42,7 +52,6 @@ pub struct DeezEngineRelayerHandler {
 impl DeezEngineRelayerHandler {
     pub fn new(
         mut deez_engine_receiver: Receiver<BlockEnginePackets>,
-        deez_engine_url: String,
     ) -> DeezEngineRelayerHandler {
         let deez_engine_forwarder = Builder::new()
             .name("deez_engine_relayer_handler_thread".into())
@@ -52,7 +61,6 @@ impl DeezEngineRelayerHandler {
                     loop {
                         let result = Self::connect(
                             &mut deez_engine_receiver,
-                            &deez_engine_url,
                         )
                         .await;
 
@@ -72,9 +80,10 @@ impl DeezEngineRelayerHandler {
 
     async fn connect(
         deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
-        deez_engine_url: &str,
     ) -> DeezEngineResult<()> {
-        let engine_stream = Self::connect_to_engine(deez_engine_url).await?;
+        let deez_engine_url = Self::find_closest_engine().await?;
+        info!(format!("determined closest engine as {}", deez_engine_url));
+        let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
         Self::start_event_loop(deez_engine_receiver, engine_stream).await
     }
 
@@ -138,6 +147,39 @@ impl DeezEngineRelayerHandler {
                 }
 
             }
+        }
+    }
+
+    pub async fn find_closest_engine() -> DeezEngineResult<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5));
+        
+        let mut closest_engine = String::new();
+        let mut shortest_time = Duration::from_secs(u64::MAX);
+
+        for &url in DEEZ_ENGINE_URLS.iter() {
+            let start = Instant::now();
+            let result = client.get(format!("http://{}:8372/mempool/health", url)).send();
+
+            match result {
+                Ok(_response) => {
+                    let elapsed = start.elapsed();
+                    if elapsed < shortest_time {
+                        shortest_time = elapsed;
+                        closest_engine = url.to_string();
+                    }
+                },
+                Err(_e) => {
+                    info!(format!("error connecting to {}", url))
+                    // ignore for now
+                },
+            }
+        }
+
+        if closest_engine.is_empty() {
+            return Err(DeezEngineError::CannotFindEngine("could not connect to any engine.".to_string()));
+        } else {
+            Ok(closest_engine)
         }
     }
 

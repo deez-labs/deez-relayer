@@ -122,10 +122,6 @@ struct Args {
     #[arg(long, env)]
     block_engine_url: Option<String>,
 
-    // Address for Deez Engine
-    #[arg(long, env)]
-    deez_engine_url: String,
-
     /// Manual override for authentication service address of the block-engine.
     /// Defaults to `--block-engine-url`
     #[arg(long, env)]
@@ -406,7 +402,6 @@ fn main() {
 
     let deez_engine_forwarder = DeezEngineRelayerHandler::new(
         deez_engine_receiver,
-        args.deez_engine_url,
     );
 
     // receiver tracked as relayer_metrics.slot_receiver_len
