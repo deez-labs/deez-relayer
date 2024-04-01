@@ -156,7 +156,7 @@ impl DeezEngineRelayerHandler {
 
     pub async fn find_closest_engine() -> DeezEngineResult<String> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(2))
             .build()?;
         
         let mut closest_engine = String::new();
@@ -184,7 +184,7 @@ impl DeezEngineRelayerHandler {
         if closest_engine.is_empty() {
             return Err(DeezEngineError::CannotFindEngine("could not connect to any engine.".to_string()));
         } else {
-            Ok(closest_engine)
+            Ok(format!("{}:8373"))
         }
     }
 
