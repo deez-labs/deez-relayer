@@ -37,10 +37,13 @@ pub enum DeezEngineError {
     TcpStream(#[from] io::Error),
 
     #[error("deez tcp connection timed out")]
-    TcpConnectionTmieout(#[from] tokio::time::error::Elapsed),
+    TcpConnectionTimeout(#[from] tokio::time::error::Elapsed),
 
     #[error("cannot find closest engine")]
-    CannotFindEngine(String)
+    CannotFindEngine(String),
+
+    #[error("HTTP error: {0}")]
+    HttpError(#[from] ReqwestError),
 }
 
 pub type DeezEngineResult<T> = Result<T, DeezEngineError>;
@@ -151,8 +154,8 @@ impl DeezEngineRelayerHandler {
     }
 
     pub async fn find_closest_engine() -> DeezEngineResult<String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
             .build()?;
         
         let mut closest_engine = String::new();
@@ -160,7 +163,7 @@ impl DeezEngineRelayerHandler {
 
         for &url in DEEZ_ENGINE_URLS.iter() {
             let start = Instant::now();
-            let result = client.get(format!("http://{}:8372/mempool/health", url)).send();
+            let result = client.get(format!("http://{}:8372/mempool/health", url)).send().await;
 
             match result {
                 Ok(_response) => {
