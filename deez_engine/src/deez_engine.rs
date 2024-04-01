@@ -88,35 +88,49 @@ impl DeezEngineRelayerHandler {
             let cloned_forwarder = forwarder.clone();
 
             select! {
-                deez_engine_batches = deez_engine_receiver.recv() => {
-                    let deez_engine_batches = deez_engine_batches.map_err(|_| DeezEngineError::Engine("block engine packet receiver disconnected".to_string()))?;
-                    trace!("received deez engine batches");
-                    // cloning is fine, it's an Arc!
-
-                    tokio::spawn(async move {
-                        for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
-                            for packet in packet_batch {
-                                if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
-                                    continue;
-                                }
-
-                                if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
-                                    let tx_data = match bincode::serialize(&tx) {
-                                        Ok(data) => data,
-                                        Err(_) => continue, // Handle serialization error or log it as needed
-                                    };
-
-                                    if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), &tx_data).await {
-                                        error!("failed to forward packets to deez engine: {e}");
-                                    } else {
-                                        info!("succesfully relayed packets");
+                recv_result = deez_engine_receiver.recv() => {
+                    match recv_result {
+                        Ok(deez_engine_batches) => {
+                            trace!("received deez engine batches");
+                            // Proceed with handling the batches as before
+                            tokio::spawn(async move {
+                                for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
+                                    for packet in packet_batch {
+                                        if packet.meta().discard() || packet.meta().is_simple_vote_tx() {
+                                            continue;
+                                        }
+        
+                                        if let Ok(tx) = packet.deserialize_slice::<VersionedTransaction, _>(..) {
+                                            let tx_data = match bincode::serialize(&tx) {
+                                                Ok(data) => data,
+                                                Err(_) => continue, // Handle serialization error or log it as needed
+                                            };
+        
+                                            if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), &tx_data).await {
+                                                error!("failed to forward packets to deez engine: {e}");
+                                            } else {
+                                                info!("succesfully relayed packets");
+                                            }
+        
+                                        }
                                     }
-
-                                }
+                                };
+                            });
+                        }
+                        Err(e) => match e {
+                            tokio::sync::broadcast::error::RecvError::Lagged(n) => {
+                                warn!("Receiver lagged by {n} messages, continuing to receive future messages.");
+                                // Optionally handle the situation, e.g., logging, metrics.
+                                // No need to reconnect or re-subscribe explicitly.
                             }
-                        };
-                    });
+                            tokio::sync::broadcast::error::RecvError::Closed => {
+                                return Err(DeezEngineError::Engine("broadcast channel closed".to_string()));
+                                // Or handle the closed channel according to your application's needs
+                            }
+                        },
+                    }
                 }
+
                 _ = heartbeat_interval.tick() => {
                     info!("sending heartbeat (deez)");
                     Self::forward_packets(cloned_forwarder.clone(), HEARTBEAT_MSG).await?;
