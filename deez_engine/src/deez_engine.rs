@@ -5,9 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose, Engine};
 use jito_block_engine::block_engine::BlockEnginePackets;
 use log::*;
-use reqwest::Error as ReqwestError;
 use solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 use tokio::{
@@ -15,11 +15,10 @@ use tokio::{
     net::TcpStream,
     runtime::Runtime,
     select,
-    sync::{broadcast::Receiver, Mutex},
+    sync::{broadcast::Receiver, mpsc, Mutex},
     time::{interval, sleep, timeout},
 };
 
-const DELIMITER: &[u8; 1] = b"\n";
 const HEARTBEAT_MSG: &[u8; 5] = b"ping\n";
 const DEEZ_ENGINE_URLS: [&str; 5] = [
     "ny.engine.deez.wtf",
@@ -43,8 +42,8 @@ pub enum DeezEngineError {
     #[error("cannot find closest engine")]
     CannotFindEngine(String),
 
-    #[error("HTTP error: {0}")]
-    HttpError(#[from] ReqwestError),
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
 }
 
 pub type DeezEngineResult<T> = Result<T, DeezEngineError>;
@@ -67,7 +66,22 @@ impl DeezEngineRelayerHandler {
                         .await;
 
                         if let Err(e) = result {
-                            error!("error with deez engine connection, attempting to re-establish connection: {:?}", e);
+                            match e {
+                                DeezEngineError::Engine(_) => {
+                                    deez_engine_receiver = deez_engine_receiver.resubscribe();
+                                    error!("error with deez engine broadcast receiver, resubscribing to event stream: {:?}", e)
+                                },
+                                DeezEngineError::TcpStream(_) | DeezEngineError::TcpConnectionTimeout(_) => {
+                                    error!("error with deez engine connection, attempting to re-establish connection: {:?}", e);
+                                },
+                                DeezEngineError::CannotFindEngine(_) => {
+                                    error!("failed to find eligible mempool engine to connect to, retrying: {:?}", e);
+                                },
+                                DeezEngineError::Http(e) => {
+                                    error!("failed to connect to mempool engine: {:?}, retrying", e);
+                                }
+                            }
+                           
                             sleep(Duration::from_secs(2)).await;
                         }
                     }
@@ -95,15 +109,17 @@ impl DeezEngineRelayerHandler {
     ) -> DeezEngineResult<()> {
         let forwarder = Arc::new(Mutex::new(deez_engine_stream));
         let mut heartbeat_interval = interval(Duration::from_secs(5));
-
+        let (forward_error_sender, mut forward_error_receiver) = mpsc::unbounded_channel();
+         
         loop {
             let cloned_forwarder = forwarder.clone();
+            let cloned_error_sender = forward_error_sender.clone();
 
             select! {
                 recv_result = deez_engine_receiver.recv() => {
                     match recv_result {
                         Ok(deez_engine_batches) => {
-                            //trace!("received deez engine batches");
+                            trace!("received deez engine batches");
                             // Proceed with handling the batches as before
                             tokio::spawn(async move {
                                 for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
@@ -117,20 +133,22 @@ impl DeezEngineRelayerHandler {
                                                 Ok(data) => data,
                                                 Err(_) => continue, // Handle serialization error or log it as needed
                                             };
-
-                                            let base64_encoded_tx = base64::encode(tx_data);
-
+                                        
+                                            let base64_encoded_tx = general_purpose::STANDARD.encode(tx_data);
                                             let delimited_tx_data = format!("{}\n", base64_encoded_tx);
 
                                             if let Err(e) = Self::forward_packets(cloned_forwarder.clone(), delimited_tx_data.as_bytes()).await {
-                                                error!("failed to forward packets to deez engine: {e}");
+                                                if let Err(send_err) = cloned_error_sender.send(e) {
+                                                    error!("failed to transmit packet forward error to management channel: {send_err}");
+                                                }
                                             } else {
-                                                //trace!("succesfully relayed packets");
+                                                trace!("succesfully relayed packets");
                                             }
                                         }
                                     }
                                 };
                             });
+
                         }
                         Err(e) => match e {
                             tokio::sync::broadcast::error::RecvError::Lagged(n) => {
@@ -142,12 +160,18 @@ impl DeezEngineRelayerHandler {
                         },
                     }
                 }
-
+                forward_error = forward_error_receiver.recv() => {
+                    match forward_error {
+                        Some(e) => {
+                            return Err(DeezEngineError::TcpStream(e))
+                        },
+                        None => continue,
+                    }
+                }
                 _ = heartbeat_interval.tick() => {
                     info!("sending heartbeat (deez)");
                     Self::forward_packets(cloned_forwarder.clone(), HEARTBEAT_MSG).await?;
                 }
-
             }
         }
     }
@@ -176,16 +200,16 @@ impl DeezEngineRelayerHandler {
                     }
                 }
                 Err(_e) => {
-                    info!("error connecting to {}", url)
+                    error!("error connecting to {}", url)
                     // ignore for now
                 }
             }
         }
 
         if closest_engine.is_empty() {
-            return Err(DeezEngineError::CannotFindEngine(
+            Err(DeezEngineError::CannotFindEngine(
                 "could not connect to any engine.".to_string(),
-            ));
+            ))
         } else {
             Ok(format!("{}:8373", closest_engine))
         }
