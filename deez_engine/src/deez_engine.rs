@@ -1,7 +1,4 @@
-use std::{
-    error, net::{SocketAddr, ToSocketAddrs}, sync::Arc, thread::{Builder, JoinHandle}, time::{Duration, Instant}
-};
-
+use std::{net::{SocketAddr, ToSocketAddrs}, sync::Arc, thread::{Builder, JoinHandle}, time::{Duration, Instant}};
 use jito_block_engine::block_engine::BlockEnginePackets;
 use log::*;
 use quinn::{ConnectError, Connection, ConnectionError, Endpoint, SendDatagramError};
@@ -14,9 +11,9 @@ use tokio::{
     time::{interval, sleep},
 };
 
-use crate::tls::configure_client_insecure;
+use crate::tls::configure_client;
 
-const HEARTBEAT_MSG: &[u8; 6] = &[0x04, 0x00, 0x70, 0x69, 0x6E, 0x67];
+const HEARTBEAT_MSG: &[u8; 4] = b"ping";
 const DEEZ_ENGINE_URLS: [&str; 5] = [
     "ny.engine.deez.wtf",
     "utah.engine.deez.wtf",
@@ -222,7 +219,7 @@ impl DeezEngineRelayerHandler {
     }
 
     pub async fn connect_to_engine(engine_url: &str) -> DeezEngineResult<Connection> {
-        let client_config = configure_client_insecure();
+        let client_config = configure_client();
         let mut endpoint = Endpoint::client("0.0.0.0:6969".parse::<SocketAddr>().unwrap())?;
         endpoint.set_default_client_config(client_config);
         
@@ -231,6 +228,7 @@ impl DeezEngineRelayerHandler {
             println!("{address}");
 
             if let Ok(connection) = endpoint.connect(address, engine_url.split(':').collect::<Vec<&str>>()[0])?.await {
+                info!("successfully connected to deez QUIC engine");
                 return Ok(connection);
             } else {
                 continue;
@@ -239,8 +237,6 @@ impl DeezEngineRelayerHandler {
 
         Err(DeezEngineError::Engine("failed to connect to suitable socket address".to_string()))
     }
-
-
 
     async fn forward_packets(
         connection: Arc<Mutex<Connection>>,
