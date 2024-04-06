@@ -29,3 +29,5 @@ tokio = { workspace = true, features = ["sync", "time"]}
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
 jito-block-engine = { workspace = true }
+quinn = "0.10.2"
+rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
