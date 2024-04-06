@@ -225,8 +225,7 @@ impl DeezEngineRelayerHandler {
         
         for address in engine_url.to_socket_addrs().unwrap() {
             endpoint.connect(address, engine_url.split(':').collect::<Vec<&str>>()[0])?.await?;
-            println!("{address}");
-
+            
             if let Ok(connection) = endpoint.connect(address, engine_url.split(':').collect::<Vec<&str>>()[0])?.await {
                 info!("successfully connected to deez QUIC engine");
                 return Ok(connection);
