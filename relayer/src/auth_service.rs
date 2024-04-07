@@ -224,7 +224,8 @@ impl<V: ValidatorAuther> AuthService for AuthServiceImpl<V> {
             warn!("Failed to create pubkey from string: {}", e);
             Status::invalid_argument("Invalid pubkey supplied.")
         })?;
-        let solana_pubkey = Pubkey::from(client_pubkey.to_bytes());
+        let solana_pubkey = Pubkey::try_from(client_pubkey.to_bytes())
+            .map_err(|_| Status::invalid_argument("Invalid pubkey supplied."))?;
 
         let auth_challenge = if let Some(challenge) = auth_challenges.get_priority(&client_ip).await
         {
