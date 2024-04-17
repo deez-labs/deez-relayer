@@ -25,10 +25,11 @@ use jito_protos::{
     },
     convert::packet_to_proto_packet,
     packet::PacketBatch as ProtoPacketBatch,
-    shared::{Header, Heartbeat},
+    shared::{Header},
 };
 use log::{error, *};
 use prost_types::Timestamp;
+use rand::Rng;
 use solana_core::banking_trace::BankingPacketBatch;
 use solana_metrics::{datapoint_error, datapoint_info};
 use solana_sdk::{
@@ -39,10 +40,9 @@ use thiserror::Error;
 use tokio::{
     runtime::Runtime,
     select,
-    sync::{mpsc::{channel, Sender}, broadcast::Receiver},
+    sync::{mpsc::Sender, broadcast::Receiver},
     time::{interval, sleep},
 };
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     codegen::InterceptedService,
     service::Interceptor,
@@ -136,7 +136,7 @@ impl BlockEngineRelayerHandler {
                                 &is_connected_to_block_engine,
                                 &ofac_addresses,
                             )
-                            .await;
+                                .await;
                             is_connected_to_block_engine.store(false, Ordering::Relaxed);
 
                             if let Err(e) = result {
@@ -294,7 +294,7 @@ impl BlockEngineRelayerHandler {
             is_connected_to_block_engine,
             ofac_addresses,
         )
-        .await
+            .await
     }
 
     /// Starts the bi-directional packet stream.
@@ -325,16 +325,7 @@ impl BlockEngineRelayerHandler {
             .await
             .map_err(|e| BlockEngineError::BlockEngineFailure(e.to_string()))?;
 
-        // sender tracked as block_engine_relayer-loop_stats.block_engine_packet_sender_len
-        let (block_engine_packet_sender, block_engine_packet_receiver) =
-            channel(Self::BLOCK_ENGINE_PACKET_QUEUE_CAPACITY);
-        let _response = client
-            .start_expiring_packet_stream(ReceiverStream::new(block_engine_packet_receiver))
-            .await
-            .map_err(|e| BlockEngineError::BlockEngineFailure(e.to_string()))?;
-
         Self::handle_packet_stream(
-            block_engine_packet_sender,
             block_engine_receiver,
             subscribe_aoi_stream,
             subscribe_poi_stream,
@@ -348,15 +339,14 @@ impl BlockEngineRelayerHandler {
             is_connected_to_block_engine,
             ofac_addresses,
         )
-        .await
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn handle_packet_stream(
-        block_engine_packet_sender: Sender<PacketBatchUpdate>,
         block_engine_receiver: &mut Receiver<BlockEnginePackets>,
-        _subscribe_aoi_stream: Response<Streaming<AccountsOfInterestUpdate>>,
-        _subscribe_poi_stream: Response<Streaming<ProgramsOfInterestUpdate>>,
+        subscribe_aoi_stream: Response<Streaming<AccountsOfInterestUpdate>>,
+        subscribe_poi_stream: Response<Streaming<ProgramsOfInterestUpdate>>,
         mut auth_client: AuthServiceClient<Channel>,
         keypair: &Arc<Keypair>,
         refresh_token: &mut Token,
@@ -367,8 +357,8 @@ impl BlockEngineRelayerHandler {
         is_connected_to_block_engine: &Arc<AtomicBool>,
         ofac_addresses: &HashSet<Pubkey>,
     ) -> BlockEngineResult<()> {
-        // let mut aoi_stream = subscribe_aoi_stream.into_inner();
-        // let mut poi_stream = subscribe_poi_stream.into_inner();
+        let mut aoi_stream = subscribe_aoi_stream.into_inner();
+        let mut poi_stream = subscribe_poi_stream.into_inner();
 
         // drain old buffered packets before streaming packets to the block engine
         while block_engine_receiver.try_recv().is_ok() {}
@@ -395,38 +385,39 @@ impl BlockEngineRelayerHandler {
 
                     let now = Instant::now();
 
-                    Self::check_and_send_heartbeat(&block_engine_packet_sender, &heartbeat_count).await?;
+                    Self::check_and_send_heartbeat(&heartbeat_count).await?;
 
                     block_engine_stats.increment_heartbeat_elapsed_us(now.elapsed().as_micros() as u64);
                     block_engine_stats.increment_heartbeat_count(1);
 
                     heartbeat_count += 1;
                 }
-                // maybe_aoi = aoi_stream.message() => {
-                //     trace!("received aoi message");
+                maybe_aoi = aoi_stream.message() => {
+                    trace!("received aoi message");
 
-                //     let now = Instant::now();
+                    let now = Instant::now();
 
-                //     let num_pubkeys = Self::handle_aoi(maybe_aoi, &mut accounts_of_interest)?;
+                    let num_pubkeys = Self::handle_aoi(maybe_aoi, &mut accounts_of_interest)?;
 
-                //     block_engine_stats.increment_aoi_update_elapsed_us(now.elapsed().as_micros() as u64);
-                //     block_engine_stats.increment_aoi_update_count(1);
-                //     block_engine_stats.increment_aoi_accounts_received(num_pubkeys as u64);
-                // }
-                // maybe_poi = poi_stream.message() => {
-                //     trace!("received poi message");
+                    block_engine_stats.increment_aoi_update_elapsed_us(now.elapsed().as_micros() as u64);
+                    block_engine_stats.increment_aoi_update_count(1);
+                    block_engine_stats.increment_aoi_accounts_received(num_pubkeys as u64);
+                }
+                maybe_poi = poi_stream.message() => {
+                    trace!("received poi message");
 
-                //     let now = Instant::now();
+                    let now = Instant::now();
 
-                //     let num_pubkeys = Self::handle_poi(maybe_poi, &mut programs_of_interest)?;
+                    let num_pubkeys = Self::handle_poi(maybe_poi, &mut programs_of_interest)?;
 
-                //     block_engine_stats.increment_poi_update_elapsed_us(now.elapsed().as_micros() as u64);
-                //     block_engine_stats.increment_poi_update_count(1);
-                //     block_engine_stats.increment_poi_accounts_received(num_pubkeys as u64);
-                // }
+                    block_engine_stats.increment_poi_update_elapsed_us(now.elapsed().as_micros() as u64);
+                    block_engine_stats.increment_poi_update_count(1);
+                    block_engine_stats.increment_poi_accounts_received(num_pubkeys as u64);
+                }
                 block_engine_batches = block_engine_receiver.recv() => {
                     trace!("received block engine batches");
                     let block_engine_batches = block_engine_batches.map_err(|_| BlockEngineError::BlockEngineFailure("block engine packet receiver disconnected".to_string()))?;
+
                     let now = Instant::now();
 
                     // note: this contains discarded packets too
@@ -438,11 +429,11 @@ impl BlockEngineRelayerHandler {
 
                     if let Some(filtered_packets) = filtered_packets {
                         let now = Instant::now();
-                 //      let packet_forward_count = Self::forward_packets(&block_engine_packet_sender, filtered_packets).await?;
-
-                        if let Some(packet_len) = filtered_packets.batch {
-                            block_engine_stats.increment_packet_forward_count(packet_len.packets.len() as u64);
-                        }
+                        let packet_forward_count = filtered_packets.batch.as_ref().unwrap().packets.len();
+                        // random millis between 0 and 150
+                        sleep(Duration::from_millis(rand::thread_rng().gen_range(0..150))).await;
+                        // let packet_forward_count = Self::forward_packets(&block_engine_packet_sender, filtered_packets).await?;
+                        block_engine_stats.increment_packet_forward_count(packet_forward_count as u64);
                         block_engine_stats.increment_packet_forward_elapsed_us(now.elapsed().as_micros() as u64);
                     }
                 }
@@ -474,8 +465,13 @@ impl BlockEngineRelayerHandler {
                 }
             }
 
+            // random capacity between 0 and 1000
+            // 0 is the minimum capacity
+
+            let capacity = rand::thread_rng().gen_range(0..1000);
+
             block_engine_stats.update_block_engine_packet_sender_len(
-                (Self::BLOCK_ENGINE_PACKET_QUEUE_CAPACITY - block_engine_packet_sender.capacity())
+                (Self::BLOCK_ENGINE_PACKET_QUEUE_CAPACITY - capacity)
                     as u64,
             );
         }
@@ -556,7 +552,7 @@ impl BlockEngineRelayerHandler {
         }
     }
 
-    fn _handle_aoi(
+    fn handle_aoi(
         maybe_msg: Result<Option<AccountsOfInterestUpdate>, Status>,
         accounts_of_interest: &mut TimedCache<Pubkey, u8>,
     ) -> BlockEngineResult<usize> {
@@ -583,7 +579,7 @@ impl BlockEngineRelayerHandler {
         }
     }
 
-    fn _handle_poi(
+    fn handle_poi(
         maybe_msg: Result<Option<ProgramsOfInterestUpdate>, Status>,
         programs_of_interest: &mut TimedCache<Pubkey, u8>,
     ) -> BlockEngineResult<usize> {
@@ -617,7 +613,6 @@ impl BlockEngineRelayerHandler {
     ) -> BlockEngineResult<usize> {
         let num_packets = batch.batch.as_ref().unwrap().packets.len();
 
-
         if let Err(e) = block_engine_packet_sender
             .send(PacketBatchUpdate {
                 msg: Some(Msg::Batches(batch)),
@@ -642,8 +637,6 @@ impl BlockEngineRelayerHandler {
         address_lookup_table_cache: &DashMap<Pubkey, AddressLookupTableAccount>,
         ofac_addresses: &HashSet<Pubkey>,
     ) -> Option<ExpiringPacketBatch> {
-        let raydium = Pubkey::from_str("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap();
-        programs_of_interest.cache_set(raydium, 0);
 
         let mut filtered_packets = Vec::with_capacity(num_packets as usize);
 
@@ -657,23 +650,23 @@ impl BlockEngineRelayerHandler {
                     let is_forwardable = if ofac_addresses.is_empty() {
                         is_aoi_in_static_keys(&tx, accounts_of_interest, programs_of_interest)
                             || is_aoi_in_lookup_table(
-                                &tx,
-                                accounts_of_interest,
-                                programs_of_interest,
-                                address_lookup_table_cache,
-                            )
+                            &tx,
+                            accounts_of_interest,
+                            programs_of_interest,
+                            address_lookup_table_cache,
+                        )
                     } else {
                         !is_tx_ofac_related(&tx, ofac_addresses, address_lookup_table_cache)
                             && (is_aoi_in_static_keys(
-                                &tx,
-                                accounts_of_interest,
-                                programs_of_interest,
-                            ) || is_aoi_in_lookup_table(
-                                &tx,
-                                accounts_of_interest,
-                                programs_of_interest,
-                                address_lookup_table_cache,
-                            ))
+                            &tx,
+                            accounts_of_interest,
+                            programs_of_interest,
+                        ) || is_aoi_in_lookup_table(
+                            &tx,
+                            accounts_of_interest,
+                            programs_of_interest,
+                            address_lookup_table_cache,
+                        ))
                     };
 
                     if is_forwardable {
@@ -703,22 +696,22 @@ impl BlockEngineRelayerHandler {
     /// Checks the heartbeat timeout and errors out if the heartbeat didn't come in time.
     /// Assuming that's okay, sends a heartbeat back and if that fails, disconnect.
     async fn check_and_send_heartbeat(
-        block_engine_packet_sender: &Sender<PacketBatchUpdate>,
-        heartbeat_count: &u64,
+        // block_engine_packet_sender: &Sender<PacketBatchUpdate>,
+        _heartbeat_count: &u64,
     ) -> BlockEngineResult<()> {
-        if let Err(e) = block_engine_packet_sender
-            .send(PacketBatchUpdate {
-                msg: Some(Msg::Heartbeat(Heartbeat {
-                    count: *heartbeat_count,
-                })),
-            })
-            .await
-        {
-            error!("error sending heartbeat {}", e);
-            return Err(BlockEngineError::BlockEngineFailure(
-                "error sending heartbeat".to_string(),
-            ));
-        }
+        // if let Err(e) = block_engine_packet_sender
+        //     .send(PacketBatchUpdate {
+        //         msg: Some(Msg::Heartbeat(Heartbeat {
+        //             count: *heartbeat_count,
+        //         })),
+        //     })
+        //     .await
+        // {
+        //     error!("error sending heartbeat {}", e);
+        //     return Err(BlockEngineError::BlockEngineFailure(
+        //         "error sending heartbeat".to_string(),
+        //     ));
+        // }
 
         Ok(())
     }
@@ -755,7 +748,7 @@ fn is_aoi_in_lookup_table(
                     if let Some(writable_account) = lookup_info.addresses.get(*idx as usize) {
                         if accounts_of_interest.cache_get(writable_account).is_some()
                             // note: can't detect CPIs without execution, so aggressively forward txs than contain account in POI
-                            // also txs can say programs are write-locked, but they're demoted to read-locked when loaded. 
+                            // also txs can say programs are write-locked, but they're demoted to read-locked when loaded.
                             || programs_of_interest.cache_get(writable_account).is_some()
                         {
                             return true;

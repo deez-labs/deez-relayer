@@ -1,6 +1,7 @@
+
 [package]
-name = "jito-transaction-relayer"
-description = "Jito relayer entrypoint"
+name = "deez-transaction-relayer"
+description = "Deez relayer entrypoint"
 version = { workspace = true }
 authors = { workspace = true }
 homepage = { workspace = true }
@@ -28,6 +29,8 @@ jwt = { workspace = true }
 log = { workspace = true }
 openssl = { workspace = true }
 prost-types = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
 reqwest = "0.11.25"
 solana-address-lookup-table-program = { workspace = true }
 solana-client = { workspace = true }
@@ -37,6 +40,7 @@ solana-net-utils = { workspace = true }
 solana-perf = { workspace = true }
 solana-program = { workspace = true }
 solana-sdk = { workspace = true }
+solana-validator = { workspace = true }
 tikv-jemallocator = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

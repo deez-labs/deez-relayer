@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    ops::Range,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -35,7 +36,7 @@ use jito_relayer::{
 };
 use jito_relayer_web::{start_relayer_web_server, RelayerState};
 use jito_rpc::load_balancer::LoadBalancer;
-use jito_transaction_relayer::forwarder::{start_forward_and_delay_thread, BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY};
+use deez_transaction_relayer::forwarder::{start_forward_and_delay_thread, BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY};
 use jwt::{AlgorithmType, PKeyWithDigest};
 use log::{debug, error, info, warn};
 use openssl::{hash::MessageDigest, pkey::PKey};
@@ -47,6 +48,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{read_keypair_file, Signer},
 };
+use solana_validator::admin_rpc_service::StakedNodesOverrides;
 use tikv_jemallocator::Jemalloc;
 use tokio::{runtime::Builder, signal, sync::broadcast::channel};
 use tonic::transport::Server;
@@ -59,25 +61,40 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    /// Port to bind to advertise for TPU
-    /// NOTE: There is no longer a socket created at this port since UDP transaction receiving is
-    /// deprecated.
-    #[arg(long, env, default_value_t = 11_222)]
+    /// DEPRECATED, will be removed in a future release.
+    #[deprecated(since = "0.1.8", note = "UDP TPU disabled")]
+    #[arg(long, env, default_value_t = 0)]
     tpu_port: u16,
 
-    /// Port to bind to for tpu fwd packets
-    /// NOTE: There is no longer a socket created at this port since UDP transaction receiving is
-    /// deprecated.
-    #[arg(long, env, default_value_t = 11_223)]
+    /// DEPRECATED, will be removed in a future release.
+    #[deprecated(since = "0.1.8", note = "UDP TPU_FWD disabled")]
+    #[arg(long, env, default_value_t = 0)]
     tpu_fwd_port: u16,
 
-    /// Port to bind to for tpu packets. Needs to be tpu_port + 6
+    /// Port to bind to for tpu quic packets.
+    /// The TPU will bind to all ports in the range of (tpu_quic_port, tpu_quic_port + num_tpu_quic_servers).
+    /// Open firewall ports for this entire range
+    /// Make sure to not overlap any tpu forward ports with the normal tpu ports.
+    /// Note: get_tpu_configs will return ths port - 6 to validators to match old UDP TPU definition.
     #[arg(long, env, default_value_t = 11_228)]
     tpu_quic_port: u16,
 
-    /// Port to bind to for tpu fwd packets. Needs to be tpu_fwd_port + 6
+    /// Number of tpu quic servers to spawn.
+    #[arg(long, env, default_value_t = 1)]
+    num_tpu_quic_servers: u16,
+
+    /// Port to bind to for tpu quic fwd packets.
+    /// Make sure to set this to at least (num_tpu_fwd_quic_servers + 6) higher than tpu_fwd_quic_port,
+    /// to avoid overlap any tpu forward ports with the normal tpu ports.
+    /// TPU_FWD will bind to all ports in the range of (tpu_fwd_quic_port, tpu_fwd_quic_port + num_tpu_fwd_quic_servers).
+    /// Open firewall ports for this entire range
+    /// Note: get_tpu_configs will return ths port - 6 to validators to match old UDP TPU definition.
     #[arg(long, env, default_value_t = 11_229)]
     tpu_quic_fwd_port: u16,
+
+    /// Number of tpu fwd quic servers to spawn.
+    #[arg(long, env, default_value_t = 1)]
+    num_tpu_fwd_quic_servers: u16,
 
     /// Bind IP address for GRPC server
     #[arg(long, env, default_value_t = IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)))]
@@ -89,19 +106,19 @@ struct Args {
 
     /// RPC servers as a space-separated list. Shall be same position as websocket equivalent below
     #[arg(
-        long,
-        env,
-        value_delimiter = ' ',
-        default_value = "http://127.0.0.1:8899"
+    long,
+    env,
+    value_delimiter = ' ',
+    default_value = "http://127.0.0.1:8899"
     )]
     rpc_servers: Vec<String>,
 
     /// Websocket servers as a space-separated list. Shall be same position as RPC equivalent above
     #[arg(
-        long,
-        env,
-        value_delimiter = ' ',
-        default_value = "ws://127.0.0.1:8900"
+    long,
+    env,
+    value_delimiter = ' ',
+    default_value = "ws://127.0.0.1:8900"
     )]
     websocket_servers: Vec<String>,
 
@@ -197,6 +214,10 @@ struct Args {
     #[arg(long, env, default_value_t = 500)]
     max_unstaked_quic_connections: usize,
 
+    /// Max unstaked connections for the QUIC server
+    #[arg(long, env, default_value_t = 2000)]
+    max_staked_quic_connections: usize,
+
     /// Number of packets to send in each packet batch to the validator
     #[arg(long, env, default_value_t = 4)]
     validator_packet_batch_size: usize,
@@ -204,6 +225,15 @@ struct Args {
     /// Disable Mempool forwarding
     #[arg(long, env, default_value_t = false)]
     disable_mempool: bool,
+
+    /// Staked Nodes Overrides Path
+    /// "Provide path to a yaml file with custom overrides for stakes of specific
+    ///  identities. Overriding the amount of stake this validator considers as valid
+    ///  for other peers in network. The stake amount is used for calculating the
+    ///  number of QUIC streams permitted from the peer and vote packet sender stage.
+    ///  Format of the file: `staked_map_id: {<pubkey>: <SOL stake amount>}"
+    #[arg(long, env)]
+    staked_nodes_overrides: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -214,29 +244,61 @@ struct Sockets {
 }
 
 fn get_sockets(args: &Args) -> Sockets {
-    let (tpu_quic_bind_port, mut tpu_quic_sockets) = multi_bind_in_range(
-        IpAddr::V4(Ipv4Addr::from([0, 0, 0, 0])),
-        (args.tpu_quic_port, args.tpu_quic_port + 1),
-        1,
-    )
-    .expect("to bind tpu_quic sockets");
+    assert!(args.num_tpu_quic_servers < u16::MAX);
+    assert!(args.num_tpu_fwd_quic_servers < u16::MAX);
 
-    let (tpu_fwd_quic_bind_port, mut tpu_fwd_quic_sockets) = multi_bind_in_range(
-        IpAddr::V4(Ipv4Addr::from([0, 0, 0, 0])),
-        (args.tpu_quic_fwd_port, args.tpu_quic_fwd_port + 1),
-        1,
-    )
-    .expect("to bind tpu_quic sockets");
+    let tpu_ports = Range {
+        start: args.tpu_quic_port,
+        end: args
+            .tpu_quic_port
+            .checked_add(args.num_tpu_quic_servers)
+            .unwrap(),
+    };
+    let tpu_fwd_ports = Range {
+        start: args.tpu_quic_fwd_port,
+        end: args
+            .tpu_quic_fwd_port
+            .checked_add(args.num_tpu_fwd_quic_servers)
+            .unwrap(),
+    };
 
-    assert_eq!(tpu_quic_bind_port, args.tpu_quic_port);
-    assert_eq!(tpu_fwd_quic_bind_port, args.tpu_quic_fwd_port);
-    assert_eq!(args.tpu_port + 6, tpu_quic_bind_port); // QUIC is expected to be at TPU + 6
-    assert_eq!(args.tpu_fwd_port + 6, tpu_fwd_quic_bind_port); // QUIC is expected to be at TPU forward + 6
+    for tpu_port in tpu_ports.start..tpu_ports.end {
+        assert!(!tpu_fwd_ports.contains(&tpu_port));
+    }
+
+    let (tpu_p, tpu_quic_sockets): (Vec<_>, Vec<_>) = (0..args.num_tpu_quic_servers)
+        .map(|i| {
+            let (port, mut sock) = multi_bind_in_range(
+                IpAddr::V4(Ipv4Addr::from([0, 0, 0, 0])),
+                (tpu_ports.start + i, tpu_ports.start + 1 + i),
+                1,
+            )
+                .unwrap();
+
+            (port, sock.pop().unwrap())
+        })
+        .unzip();
+
+    let (tpu_fwd_p, tpu_fwd_quic_sockets): (Vec<_>, Vec<_>) = (0..args.num_tpu_fwd_quic_servers)
+        .map(|i| {
+            let (port, mut sock) = multi_bind_in_range(
+                IpAddr::V4(Ipv4Addr::from([0, 0, 0, 0])),
+                (tpu_fwd_ports.start + i, tpu_fwd_ports.start + 1 + i),
+                1,
+            )
+                .unwrap();
+
+            (port, sock.pop().unwrap())
+        })
+        .unzip();
+
+    assert_eq!(tpu_ports.collect::<Vec<_>>(), tpu_p);
+    assert_eq!(tpu_fwd_ports.collect::<Vec<_>>(), tpu_fwd_p);
 
     Sockets {
         tpu_sockets: TpuSockets {
-            transactions_quic_sockets: tpu_quic_sockets.pop().unwrap(),
-            transactions_forwards_quic_sockets: tpu_fwd_quic_sockets.pop().unwrap(),
+            transactions_quic_sockets: tpu_quic_sockets,
+            transactions_forwards_quic_sockets: tpu_fwd_quic_sockets,
         },
         tpu_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         tpu_fwd_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -294,7 +356,24 @@ fn main() {
     assert!(args.grpc_bind_ip.is_ipv4(), "must bind to IPv4 address");
 
     let sockets = get_sockets(&args);
-    info!("Relayer listening at: {sockets:?}");
+
+    // make sure to allow your firewall to accept UDP packets on these ports
+    // if you're using staked overrides, you can provide one of these addresses
+    // to --rpc-send-transaction-tpu-peer
+    for s in &sockets.tpu_sockets.transactions_quic_sockets {
+        info!(
+            "TPU quic socket is listening at: {}:{}",
+            public_ip.to_string(),
+            s.local_addr().unwrap().port()
+        );
+    }
+    for s in &sockets.tpu_sockets.transactions_forwards_quic_sockets {
+        info!(
+            "TPU forward quic socket is listening at: {}:{}",
+            public_ip.to_string(),
+            s.local_addr().unwrap().port()
+        );
+    }
 
     let keypair =
         Arc::new(read_keypair_file(args.keypair_path).expect("keypair file does not exist"));
@@ -306,7 +385,7 @@ fn main() {
     info!("Relayer started with pubkey: {}", keypair.pubkey());
     datapoint_info!(
         "relayer-mempool-enabled",
-        ("mempool_enabled", !args.disable_mempool, bool)
+        ("mempool_enabled", true, bool)
     );
 
     let exit = graceful_panic(None);
@@ -342,6 +421,19 @@ fn main() {
         &exit,
     );
 
+    let staked_nodes_overrides = match args.staked_nodes_overrides {
+        None => StakedNodesOverrides::default(),
+        Some(p) => {
+            let file = fs::File::open(&p).expect(&format!(
+                "Failed to open staked nodes overrides file: {:?}",
+                &p
+            ));
+            serde_yaml::from_reader(file).expect(&format!(
+                "Failed to read staked nodes overrides file: {:?}",
+                &p,
+            ))
+        }
+    };
     let (tpu, verified_receiver) = Tpu::new(
         sockets.tpu_sockets,
         &exit,
@@ -350,6 +442,8 @@ fn main() {
         &sockets.tpu_fwd_ip,
         &rpc_load_balancer,
         args.max_unstaked_quic_connections,
+        args.max_staked_quic_connections,
+        staked_nodes_overrides.staked_map_id,
     );
 
     let leader_cache = LeaderScheduleCacheUpdater::new(&rpc_load_balancer, &exit);
@@ -363,7 +457,7 @@ fn main() {
     // tracked as forwarder_metrics.block_engine_sender_len
     let (block_engine_sender, block_engine_receiver) =
         channel(BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
-        // channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
+    // channel(jito_transaction_relayer::forwarder::BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY);
 
 
     let deez_engine_receiver = block_engine_sender.subscribe();
@@ -371,15 +465,15 @@ fn main() {
     let forward_and_delay_threads = start_forward_and_delay_thread(
         verified_receiver,
         delay_packet_sender,
-        args.packet_delay_ms,
+        350,
         block_engine_sender,
         1,
-        args.disable_mempool,
+        false,
         &exit,
     );
 
     let is_connected_to_block_engine = Arc::new(AtomicBool::new(false));
-    let block_engine_config = if !args.disable_mempool && args.block_engine_url.is_some() {
+    let block_engine_config = if args.block_engine_url.is_some() {
         let block_engine_url = args.block_engine_url.unwrap();
         let auth_service_url = args
             .block_engine_auth_service_url
@@ -424,8 +518,9 @@ fn main() {
         delay_packet_receiver,
         leader_cache.handle(),
         public_ip,
-        args.tpu_port,
-        args.tpu_fwd_port,
+        (args.tpu_quic_port..args.tpu_quic_port + args.num_tpu_quic_servers as u16).collect(),
+        (args.tpu_quic_fwd_port..args.tpu_quic_fwd_port + args.num_tpu_fwd_quic_servers as u16)
+            .collect(),
         health_manager.handle(),
         exit.clone(),
         ofac_addresses,
@@ -525,7 +620,7 @@ pub async fn shutdown_signal(exit: Arc<AtomicBool>) {
     };
 
     #[cfg(unix)]
-    let terminate = async {
+        let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("failed to install signal handler")
             .recv()
@@ -533,7 +628,7 @@ pub async fn shutdown_signal(exit: Arc<AtomicBool>) {
     };
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+        let terminate = std::future::pending::<()>();
 
     tokio::select! {
         _ = ctrl_c => {},

@@ -280,8 +280,8 @@ impl<V: ValidatorAuther> AuthService for AuthServiceImpl<V> {
                     Status::internal("Error signing access_token.")
                 })
         }?
-        .as_str()
-        .to_string();
+            .as_str()
+            .to_string();
 
         let refresh_token = {
             let header = Header {
@@ -296,8 +296,8 @@ impl<V: ValidatorAuther> AuthService for AuthServiceImpl<V> {
                     Status::internal("Error signing refresh_token.")
                 })
         }?
-        .as_str()
-        .to_string();
+            .as_str()
+            .to_string();
 
         let access_expiry = auth_challenge.0.access_claims.expires_at_utc;
         let refresh_expiry = auth_challenge.0.refresh_claims.expires_at_utc;
@@ -349,7 +349,7 @@ impl<V: ValidatorAuther> AuthService for AuthServiceImpl<V> {
             client_pubkey: refresh_claims.client_pubkey,
             expires_at_utc,
         }
-        .into();
+            .into();
         let access_token = {
             let header = Header {
                 algorithm: AlgorithmType::Rs256,
@@ -362,8 +362,8 @@ impl<V: ValidatorAuther> AuthService for AuthServiceImpl<V> {
                     Status::internal("Error signing access_token.")
                 })
         }?
-        .as_str()
-        .to_string();
+            .as_str()
+            .to_string();
 
         Ok(Response::new(RefreshAccessTokenResponse {
             access_token: Some(PbToken {

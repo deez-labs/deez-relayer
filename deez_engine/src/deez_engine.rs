@@ -63,7 +63,7 @@ impl DeezEngineRelayerHandler {
                         let result = Self::connect(
                             &mut deez_engine_receiver,
                         )
-                        .await;
+                            .await;
 
                         if let Err(e) = result {
                             match e {
@@ -81,7 +81,7 @@ impl DeezEngineRelayerHandler {
                                     error!("failed to connect to mempool engine: {:?}, retrying", e);
                                 }
                             }
-                           
+
                             sleep(Duration::from_secs(2)).await;
                         }
                     }
@@ -110,7 +110,7 @@ impl DeezEngineRelayerHandler {
         let forwarder = Arc::new(Mutex::new(deez_engine_stream));
         let mut heartbeat_interval = interval(Duration::from_secs(5));
         let (forward_error_sender, mut forward_error_receiver) = mpsc::unbounded_channel();
-         
+
         loop {
             let cloned_forwarder = forwarder.clone();
             let cloned_error_sender = forward_error_sender.clone();
