@@ -131,7 +131,7 @@ impl DeezEngineRelayerHandler {
             select! {
                 recv_result = deez_engine_receiver.recv() => {
                     match recv_result {
-                        Ok(deez_engine_batches: BlockEnginePackets) => {
+                        Ok(deez_engine_batches) => {
                             trace!("received deez engine batches");
                             // Proceed with handling the batches as before
                             tokio::spawn(async move {

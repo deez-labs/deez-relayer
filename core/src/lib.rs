@@ -15,6 +15,7 @@ mod fetch_stage;
 pub mod ofac;
 mod staked_nodes_updater_service;
 pub mod tpu;
+pub mod tx_cache;
 
 /// Returns an exit boolean to let other threads gracefully shut down
 pub fn graceful_panic(callback: Option<fn(&PanicInfo)>) -> Arc<AtomicBool> {
