@@ -426,8 +426,7 @@ impl BlockEngineRelayerHandler {
                 }
                 block_engine_batches = block_engine_receiver.recv() => {
                     trace!("received block engine batches");
-                    let block_engine_batches = block_engine_batches
-                        .ok_or_else(|| BlockEngineError::BlockEngineFailure("block engine packet receiver disconnected".to_string()))?;
+                    let block_engine_batches = block_engine_batches.map_err(|_| BlockEngineError::BlockEngineFailure("block engine packet receiver disconnected".to_string()))?;
 
                     let now = Instant::now();
 
