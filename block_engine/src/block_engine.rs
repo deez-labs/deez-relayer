@@ -80,6 +80,7 @@ impl Interceptor for AuthInterceptor {
     }
 }
 
+#[derive(Clone)]
 pub struct BlockEnginePackets {
     pub banking_packet_batch: BankingPacketBatch,
     pub stamp: SystemTime,

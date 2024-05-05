@@ -151,7 +151,7 @@ impl DeezEngineRelayerHandler {
                                                 continue;
                                             }
 
-                                            let meta_bytes = match bincode::serialze(&packet.meta()) {
+                                            let meta_bytes = match bincode::serialize(&packet.meta()) {
                                                 Ok(data) => data,
                                                 Err(_) => continue,
                                             };
