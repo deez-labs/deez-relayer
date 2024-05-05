@@ -7,7 +7,6 @@ members = [
     #    "packet_blaster", // TODO (LB): fix
     "relayer",
     "rpc",
-    "solana_streamer",
     "transaction-relayer",
     "web"
 ]
