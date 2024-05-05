@@ -155,10 +155,11 @@ impl DeezEngineRelayerHandler {
                                                 Ok(data) => data,
                                                 Err(_) => continue,
                                             };
-                                            tx_data.reserve(meta_bytes.len());
-                                            tx_data.splice(0..0, meta_bytes);
+                                            let meta_len = meta_bytes.len();
+                                            tx_data.reserve(meta_len);
+                                            tx_data.splice(0..0, meta_bytes.clone());
 
-                                            let length_bytes = ((tx_data.len() + meta_bytes.len()) as u16).to_le_bytes().to_vec();
+                                            let length_bytes = ((tx_data.len() + meta_len) as u16).to_le_bytes().to_vec();
                                             tx_data.reserve(2);
                                             tx_data.splice(0..0, length_bytes);
 
