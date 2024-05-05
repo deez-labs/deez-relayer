@@ -88,12 +88,7 @@ pub fn start_forward_and_delay_thread(
                                             forwarder_metrics.num_be_packets_forwarded +=
                                                 num_packets;
                                         }
-                                        Err(TrySendError::Closed(_)) => {
-                                            panic!(
-                                                "error sending packet batch to block engine handler"
-                                            );
-                                        }
-                                        Err(TrySendError::Full(_)) => {
+                                        Err(_) => {
                                             // block engine most likely not connected
                                             forwarder_metrics.num_be_packets_dropped += num_packets;
                                             forwarder_metrics.num_be_sender_full += 1;
