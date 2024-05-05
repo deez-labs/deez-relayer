@@ -79,7 +79,7 @@ pub fn start_forward_and_delay_thread(
                                 // try_send because the block engine receiver only drains when it's connected
                                 // and we don't want to OOM on packet_receiver
                                 if !disable_mempool {
-                                    match block_engine_sender.try_send(BlockEnginePackets {
+                                    match block_engine_sender.send(BlockEnginePackets {
                                         banking_packet_batch: banking_packet_batch.clone(),
                                         stamp: system_time,
                                         expiration: packet_delay_ms,
@@ -134,7 +134,7 @@ pub fn start_forward_and_delay_thread(
                             buffered_packet_batches.len(),
                             buffered_packet_batches.capacity(),
                             verified_receiver.len(),
-                            BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY - block_engine_sender.capacity(),
+                            BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY - block_engine_sender.len(),
                         );
                     }
                 })
