@@ -81,7 +81,7 @@ solana-program = "=1.17.31"
 solana-rayon-threadlimit = "=1.17.31"
 solana-runtime = "=1.17.31"
 solana-sdk = "=1.17.31"
-solana-streamer = { path = "solana_streamer", version = "=1.17.31"}
+solana-streamer = "=1.17.31"
 solana-validator = "=1.17.31"
 thiserror = "1.0.40"
 tikv-jemallocator = { version = "0.4", features = ["profiling"] }
