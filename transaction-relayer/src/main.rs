@@ -50,7 +50,7 @@ use solana_sdk::{
 };
 use solana_validator::admin_rpc_service::StakedNodesOverrides;
 use tikv_jemallocator::Jemalloc;
-use tokio::{runtime::Builder, signal, sync::mpsc::channel};
+use tokio::{runtime::Builder, signal, sync::broadcast::channel};
 use tonic::transport::Server;
 
 // no-op change to test ci

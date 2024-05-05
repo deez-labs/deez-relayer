@@ -39,7 +39,7 @@ use thiserror::Error;
 use tokio::{
     runtime::Runtime,
     select,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{broadcast::Receiver, mpsc::channel as mpsc_channel, mpsc::Sender},
     time::{interval, sleep},
 };
 use tokio_stream::wrappers::ReceiverStream;
@@ -327,7 +327,7 @@ impl BlockEngineRelayerHandler {
 
         // sender tracked as block_engine_relayer-loop_stats.block_engine_packet_sender_len
         let (block_engine_packet_sender, block_engine_packet_receiver) =
-            channel(Self::BLOCK_ENGINE_PACKET_QUEUE_CAPACITY);
+            mpsc_channel(Self::BLOCK_ENGINE_PACKET_QUEUE_CAPACITY);
         let _response = client
             .start_expiring_packet_stream(ReceiverStream::new(block_engine_packet_receiver))
             .await

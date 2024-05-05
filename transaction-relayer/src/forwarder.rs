@@ -23,7 +23,7 @@ pub fn start_forward_and_delay_thread(
     verified_receiver: Receiver<BankingPacketBatch>,
     delay_packet_sender: Sender<RelayerPacketBatches>,
     packet_delay_ms: u32,
-    block_engine_sender: tokio::sync::mpsc::Sender<BlockEnginePackets>,
+    block_engine_sender: tokio::sync::broadcast::Sender<BlockEnginePackets>,
     num_threads: u64,
     disable_mempool: bool,
     exit: &Arc<AtomicBool>,
@@ -48,7 +48,7 @@ pub fn start_forward_and_delay_thread(
                     let mut forwarder_metrics = ForwarderMetrics::new(
                         buffered_packet_batches.capacity(),
                         verified_receiver.capacity().unwrap_or_default(), // TODO (LB): unbounded channel now, remove metric
-                        block_engine_sender.capacity(),
+                        0, // set to 0 as broadcast doesn't have capacity method
                     );
                     let mut last_metrics_upload = Instant::now();
 
@@ -59,7 +59,7 @@ pub fn start_forward_and_delay_thread(
                             forwarder_metrics = ForwarderMetrics::new(
                                 buffered_packet_batches.capacity(),
                                 verified_receiver.capacity().unwrap_or_default(), // TODO (LB): unbounded channel now, remove metric
-                                block_engine_sender.capacity(),
+                                0, // set to 0 as broadcast doesn't have capacity method
                             );
                             last_metrics_upload = Instant::now();
                         }
