@@ -269,7 +269,7 @@ impl DeezEngineRelayerHandler {
         info!("successfully connected to deez tcp engine!");
 
         // send v2 header
-        cloned_stream.write_all(V2_MSG_WITH_LENGTH).await;
+        stream.write_all(V2_MSG_WITH_LENGTH).await;
 
         Ok(stream)
     }
