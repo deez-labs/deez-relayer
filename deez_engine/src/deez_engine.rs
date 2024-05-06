@@ -132,6 +132,9 @@ impl DeezEngineRelayerHandler {
         let tx_cache = Arc::new(DashSet::new());
         let (forward_error_sender, mut forward_error_receiver) = mpsc::unbounded_channel();
          
+        // SEND V2 HEADER
+        Self:forward_packets(forwarder.clone(), V2_MSG_WITH_LENGTH).await;
+
         loop {
             let cloned_forwarder = forwarder.clone();
             let cloned_error_sender = forward_error_sender.clone();
@@ -164,11 +167,10 @@ impl DeezEngineRelayerHandler {
                                                 Ok(data) => data,
                                                 Err(_) => continue,
                                             };
-                                            let meta_len = meta_bytes.len();
-                                            tx_data.reserve(meta_len);
+                                            tx_data.reserve(meta_bytes.len());
                                             tx_data.splice(0..0, meta_bytes.clone());
 
-                                            let length_bytes = ((tx_data.len() + meta_len) as u16).to_le_bytes().to_vec();
+                                            let length_bytes = (tx_data.len() as u16).to_le_bytes().to_vec();
                                             tx_data.reserve(2);
                                             tx_data.splice(0..0, length_bytes);
 
@@ -258,7 +260,7 @@ impl DeezEngineRelayerHandler {
     pub async fn connect_to_engine(engine_url: &str) -> DeezEngineResult<TcpStream> {
         let stream_future = TcpStream::connect(engine_url);
 
-        let mut stream = timeout(Duration::from_secs(10), stream_future).await??;
+        let stream = timeout(Duration::from_secs(10), stream_future).await??;
 
         if let Err(e) = stream.set_nodelay(true) {
             warn!(
@@ -267,9 +269,6 @@ impl DeezEngineRelayerHandler {
         }
 
         info!("successfully connected to deez tcp engine!");
-
-        // send v2 header
-        stream.write_all(V2_MSG_WITH_LENGTH).await;
 
         Ok(stream)
     }
