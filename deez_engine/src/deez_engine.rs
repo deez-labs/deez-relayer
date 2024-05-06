@@ -133,7 +133,7 @@ impl DeezEngineRelayerHandler {
         let (forward_error_sender, mut forward_error_receiver) = mpsc::unbounded_channel();
          
         // SEND V2 HEADER
-        Self:forward_packets(forwarder.clone(), V2_MSG_WITH_LENGTH).await;
+        Self::forward_packets(forwarder.clone(), V2_MSG_WITH_LENGTH).await;
 
         loop {
             let cloned_forwarder = forwarder.clone();
