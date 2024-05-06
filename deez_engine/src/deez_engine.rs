@@ -31,6 +31,15 @@ const HEARTBEAT_MSG_WITH_LENGTH: &[u8; 6] = &[
     HEARTBEAT_MSG[3],
 ];
 
+const V2_LEN: u16 = 2;
+const V2_MESSAGE: &[u8; 2] = b"v2";
+const V2_MESSAGE_WITH_LENGTH: &[u8; 4] = &[
+    (V2_LEN & 0xFF) as u8,
+    ((V2_LEN >> 8) & 0xFF) as u8,
+    V2_MSG[0],
+    V2_MSG[1],
+];
+
 const DEEZ_REGIONS: [&str; 2] = [
     "ny",
     "de",
@@ -258,6 +267,10 @@ impl DeezEngineRelayerHandler {
         }
 
         info!("successfully connected to deez tcp engine!");
+
+        // send v2 header
+        stream.write_all(V2_MESSAGE_WITH_LENGTH).await;
+
         Ok(stream)
     }
 
