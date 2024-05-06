@@ -32,8 +32,8 @@ const HEARTBEAT_MSG_WITH_LENGTH: &[u8; 6] = &[
 ];
 
 const V2_LEN: u16 = 2;
-const V2_MESSAGE: &[u8; 2] = b"v2";
-const V2_MESSAGE_WITH_LENGTH: &[u8; 4] = &[
+const V2_MSG: &[u8; 2] = b"v2";
+const V2_MSG_WITH_LENGTH: &[u8; 4] = &[
     (V2_LEN & 0xFF) as u8,
     ((V2_LEN >> 8) & 0xFF) as u8,
     V2_MSG[0],
@@ -258,7 +258,7 @@ impl DeezEngineRelayerHandler {
     pub async fn connect_to_engine(engine_url: &str) -> DeezEngineResult<TcpStream> {
         let stream_future = TcpStream::connect(engine_url);
 
-        let stream = timeout(Duration::from_secs(10), stream_future).await??;
+        let mut stream = timeout(Duration::from_secs(10), stream_future).await??;
 
         if let Err(e) = stream.set_nodelay(true) {
             warn!(
@@ -269,7 +269,7 @@ impl DeezEngineRelayerHandler {
         info!("successfully connected to deez tcp engine!");
 
         // send v2 header
-        stream.write_all(V2_MESSAGE_WITH_LENGTH).await;
+        cloned_stream.write_all(V2_MSG_WITH_LENGTH).await;
 
         Ok(stream)
     }
