@@ -13,7 +13,6 @@ use jito_block_engine::block_engine::BlockEnginePackets;
 use jito_relayer::relayer::RelayerPacketBatches;
 use solana_core::banking_trace::BankingPacketBatch;
 use solana_metrics::datapoint_info;
-use tokio::sync::mpsc::error::TrySendError;
 
 pub const BLOCK_ENGINE_FORWARDER_QUEUE_CAPACITY: usize = 5_000;
 
