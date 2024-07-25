@@ -497,7 +497,9 @@ fn main() {
         ofac_addresses.clone(),
     );
 
-    let deez_engine_forwarder = DeezEngineRelayerHandler::new(deez_engine_receiver);
+    let rpc_servers = servers.iter().map(|(rpc, _)| rpc.clone()).collect();
+
+    let deez_engine_forwarder = DeezEngineRelayerHandler::new(deez_engine_receiver, rpc_servers);
 
     // receiver tracked as relayer_metrics.slot_receiver_len
     // downstream channel gets data that was duplicated by HealthManager

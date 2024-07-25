@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4.0
-FROM rust:1.66.0-slim-bullseye as builder
+FROM rust:1.76.0-slim-bullseye as builder
 
 RUN set -x \
     && apt-get -qq update \

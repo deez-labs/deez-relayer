@@ -4,23 +4,28 @@ use std::{
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
 };
-
 use dashmap::DashSet;
 use jito_block_engine::block_engine::BlockEnginePackets;
 use jito_core::tx_cache::should_forward_tx;
 use log::*;
 use solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
-use tokio::{
-    io::AsyncWriteExt,
-    net::TcpStream,
-    runtime::Runtime,
-    select,
-    sync::{broadcast::Receiver, mpsc, Mutex},
-    time::{interval, sleep, timeout},
-};
+use tokio::{io::AsyncWriteExt, net::TcpStream, runtime::Runtime, select, sync::{broadcast::Receiver, mpsc, Mutex}, task, time::{interval, sleep, timeout}};
+use tokio::io::{AsyncReadExt, BufReader};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use crate::heartbeat_sender::OnChainHeartbeatSender;
 
 const HEARTBEAT_LEN: u16 = 4;
+const PONG_MESSAGE: &[u8; 4] = b"pong";
+const PONG_MSG_WITH_LENGTH: &[u8; 6] = &[
+    (HEARTBEAT_LEN & 0xFF) as u8,
+    ((HEARTBEAT_LEN >> 8) & 0xFF) as u8,
+    PONG_MESSAGE[0],
+    PONG_MESSAGE[1],
+    PONG_MESSAGE[2],
+    PONG_MESSAGE[3],
+];
+
 const HEARTBEAT_MSG: &[u8; 4] = b"ping";
 const HEARTBEAT_MSG_WITH_LENGTH: &[u8; 6] = &[
     (HEARTBEAT_LEN & 0xFF) as u8,
@@ -40,12 +45,23 @@ const V2_MSG_WITH_LENGTH: &[u8; 4] = &[
     V2_MSG[1],
 ];
 
+const V3_LEN: u16 = 2;
+const V3_MSG: &[u8; 2] = b"v3";
+const V3_MSG_WITH_LENGTH: &[u8; 4] = &[
+    (V3_LEN & 0xFF) as u8,
+    ((V3_LEN >> 8) & 0xFF) as u8,
+    V3_MSG[0],
+    V3_MSG[1],
+];
+
+
+const RPC_HEARTBEAT_MSG: [u8; 2] = [0, 0];
+
 const DEEZ_REGIONS: [&str; 2] = [
     "ny",
     "de",
 ];
 const DEEZ_ENGINE_URL: &str = ".engine.v2.deez.wtf:8374";
-const DEEZ_PINGER_URL: &str = ".pinger.deez.wtf:50500";
 
 #[derive(Error, Debug)]
 pub enum DeezEngineError {
@@ -71,8 +87,51 @@ pub struct DeezEngineRelayerHandler {
     deez_engine_forwarder: JoinHandle<()>,
 }
 
+pub struct ParsedMessage {
+    pub header: [u8; 2],
+    pub body: Vec<u8>,
+}
+
+pub struct TcpReaderCodec {
+    reader: BufReader<OwnedReadHalf>,
+}
+
+impl TcpReaderCodec {
+    /// Encapsulate a TcpStream with reader functionality
+    pub fn new(stream: OwnedReadHalf) -> io::Result<Self> {
+        let reader = BufReader::new(stream);
+        Ok(Self { reader })
+    }
+
+    async fn read_u16_from_bufreader(reader: &mut BufReader<OwnedReadHalf>) -> io::Result<u16> {
+        let mut buf = [0; 2];
+        reader.read_exact(&mut buf).await?;
+        Ok(u16::from_le_bytes(buf))
+    }
+
+    async fn read_from_bufreader(reader: &mut BufReader<OwnedReadHalf>) -> io::Result<Vec<u8>> {
+        let length = Self::read_u16_from_bufreader(reader).await?;
+        let mut buffer = vec![0; length as usize];
+        reader.read_exact(&mut buffer).await?;
+        Ok(buffer)
+    }
+
+    pub async fn read_message(&mut self) -> io::Result<ParsedMessage> {
+        let b = Self::read_from_bufreader(&mut self.reader).await?;
+        if b.len() < 2 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Message too short"));
+        }
+        let header = [b[0], b[1]];
+        let message = ParsedMessage {
+            header,
+            body: b[2..].to_vec(),
+        };
+        Ok(message)
+    }
+}
+
 impl DeezEngineRelayerHandler {
-    pub fn new(mut deez_engine_receiver: Receiver<BlockEnginePackets>) -> DeezEngineRelayerHandler {
+    pub fn new(mut deez_engine_receiver: Receiver<BlockEnginePackets>, rpc_servers: Vec<String>) -> DeezEngineRelayerHandler {
         let deez_engine_forwarder = Builder::new()
             .name("deez_engine_relayer_handler_thread".into())
             .spawn(move || {
@@ -81,6 +140,7 @@ impl DeezEngineRelayerHandler {
                     loop {
                         let result = Self::connect(
                             &mut deez_engine_receiver,
+                            rpc_servers.clone(),
                         )
                         .await;
 
@@ -115,30 +175,39 @@ impl DeezEngineRelayerHandler {
 
     async fn connect(
         deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
+        rpc_servers: Vec<String>,
     ) -> DeezEngineResult<()> {
         let deez_engine_url = Self::find_closest_engine().await?;
         info!("determined closest engine as {}", deez_engine_url);
         let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
-        Self::start_event_loop(deez_engine_receiver, engine_stream).await
+        Self::start_event_loop(deez_engine_receiver, engine_stream, rpc_servers).await
     }
 
     async fn start_event_loop(
         deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
         deez_engine_stream: TcpStream,
+        rpc_servers: Vec<String>
     ) -> DeezEngineResult<()> {
-        let forwarder = Arc::new(Mutex::new(deez_engine_stream));
+        let (reader, writer) = deez_engine_stream.into_split();
+        let mut line_reader = TcpReaderCodec::new(reader)?;
+        let forwarder = Arc::new(Mutex::new(writer));
         let mut heartbeat_interval = interval(Duration::from_secs(5));
         let mut flush_interval = interval(Duration::from_secs(60));
         let tx_cache = Arc::new(DashSet::new());
         let (forward_error_sender, mut forward_error_receiver) = mpsc::unbounded_channel();
-         
+        let onchain_heartbeat_sender = Arc::new(Mutex::new(OnChainHeartbeatSender::new(rpc_servers)));
+
         // SEND V2 HEADER
-        Self::forward_packets(forwarder.clone(), V2_MSG_WITH_LENGTH).await;
+        let _ = Self::forward_packets(forwarder.clone(), V2_MSG_WITH_LENGTH).await;
+
+        // SEND V3 HEADER
+        let _ = Self::forward_packets(forwarder.clone(), V3_MSG_WITH_LENGTH).await;
 
         loop {
             let cloned_forwarder = forwarder.clone();
             let cloned_error_sender = forward_error_sender.clone();
             let cloned_tx_cache = tx_cache.clone();
+            let heartbeat_sender = onchain_heartbeat_sender.clone();
 
             select! {
                 recv_result = deez_engine_receiver.recv() => {
@@ -199,6 +268,18 @@ impl DeezEngineRelayerHandler {
                         },
                     }
                 }
+                on_chain_heartbeat = line_reader.read_message() => {
+                    match on_chain_heartbeat {
+                        Ok(message) => {
+                            if message.header == RPC_HEARTBEAT_MSG {
+                                 tokio::spawn(async move {
+                                        let _ = heartbeat_sender.lock().await.broadcast(message.body).await;
+                                    });
+                            }
+                        },
+                        _ => {}
+                    }
+                }
                 forward_error = forward_error_receiver.recv() => {
                     match forward_error {
                         Some(e) => {
@@ -220,41 +301,64 @@ impl DeezEngineRelayerHandler {
     }
 
     pub async fn find_closest_engine() -> DeezEngineResult<String> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()?;
-
-        let mut clostest_region = String::new();
-        let mut shortest_time = Duration::from_secs(u64::MAX);
+        let attempts = 5;
+        let mut handles = vec![];
 
         for &region in DEEZ_REGIONS.iter() {
-            let start = Instant::now();
-            let result = client
-                .get(format!("http://{}{}", region, DEEZ_PINGER_URL))
-                .send()
-                .await;
+            let region = region.to_string();
 
-            match result {
-                Ok(_response) => {
-                    let elapsed = start.elapsed();
-                    if elapsed < shortest_time {
-                        shortest_time = elapsed;
-                        clostest_region = region.to_string();
+            let handle = task::spawn(async move {
+                let mut total_latency = Duration::ZERO;
+                let mut success_count = 0;
+
+                for _ in 0..attempts {
+                    match TcpStream::connect(format!("{}{}", region, DEEZ_ENGINE_URL)).await {
+                        Ok(mut stream) => {
+                            let start = Instant::now();
+
+                            let _ = stream.write_all(V2_MSG_WITH_LENGTH).await;
+
+                            if stream.write_all(HEARTBEAT_MSG_WITH_LENGTH).await.is_ok() {
+                                let mut buffer = vec![0; PONG_MSG_WITH_LENGTH.len()];
+                                if stream.read_exact(&mut buffer).await.is_ok() {
+                                    if buffer == PONG_MSG_WITH_LENGTH {
+                                        let elapsed = start.elapsed();
+                                        total_latency += elapsed;
+                                        success_count += 1;
+                                    }
+                                }
+                            }
+                        }
+                        Err(_e) => {
+                            error!("error connecting to {}", region);
+                        }
                     }
                 }
-                Err(_e) => {
-                    error!("error connecting to {}", region)
+
+                if success_count > 0 {
+                    let average_latency = total_latency / success_count as u32;
+                    Some((region, average_latency))
+                } else {
+                    None
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        let mut shortest_time = Duration::from_secs(u64::MAX);
+        let mut closest_region  = DEEZ_REGIONS[1].to_string();
+
+        for handle in handles {
+            if let Ok(Some((region, average_latency))) = handle.await {
+                if average_latency < shortest_time {
+                    shortest_time = average_latency;
+                    closest_region = region;
                 }
             }
         }
-
-        if clostest_region.is_empty() {
-            Err(DeezEngineError::CannotFindEngine(
-                "could not connect to any engine.".to_string(),
-            ))
-        } else {
-            Ok(format!("{}{}", clostest_region, DEEZ_ENGINE_URL))
-        }
+        info!("determined closest region: {}", closest_region);
+        Ok(format!("{}{}", closest_region, DEEZ_ENGINE_URL))
     }
 
     pub async fn connect_to_engine(engine_url: &str) -> DeezEngineResult<TcpStream> {
@@ -274,7 +378,7 @@ impl DeezEngineRelayerHandler {
     }
 
     pub async fn forward_packets(
-        stream: Arc<Mutex<TcpStream>>,
+        stream: Arc<Mutex<OwnedWriteHalf>>,
         data: &[u8],
     ) -> Result<(), std::io::Error> {
         stream.lock().await.write_all(data).await
