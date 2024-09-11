@@ -466,7 +466,7 @@ fn main() {
     let forward_and_delay_threads = start_forward_and_delay_thread(
         verified_receiver,
         delay_packet_sender,
-        args.packet_delay_ms,
+        450,
         block_engine_sender,
         1,
         args.disable_mempool,

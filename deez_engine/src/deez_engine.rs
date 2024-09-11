@@ -57,9 +57,10 @@ const V3_MSG_WITH_LENGTH: &[u8; 4] = &[
 
 const RPC_HEARTBEAT_MSG: [u8; 2] = [0, 0];
 
-const DEEZ_REGIONS: [&str; 2] = [
+const DEEZ_REGIONS: [&str; 3] = [
     "ny",
     "de",
+    "cali",
 ];
 const DEEZ_ENGINE_URL: &str = ".engine.v2.deez.wtf:8374";
 
