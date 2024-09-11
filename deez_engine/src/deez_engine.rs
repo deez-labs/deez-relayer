@@ -60,6 +60,7 @@ const RPC_HEARTBEAT_MSG: [u8; 2] = [0, 0];
 const DEEZ_REGIONS: [&str; 2] = [
     "ny",
     "de",
+    "cali",
 ];
 const DEEZ_ENGINE_URL: &str = ".engine.v2.deez.wtf:8374";
 
