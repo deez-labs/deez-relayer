@@ -499,7 +499,8 @@ fn main() {
 
     let rpc_servers = servers.iter().map(|(rpc, _)| rpc.clone()).collect();
 
-    let deez_engine_forwarder = DeezEngineRelayerHandler::new(deez_engine_receiver, rpc_servers);
+    let restart_interval = Duration::from_secs(4 * 60 * 60); // 4 hours in seconds
+    let deez_engine_forwarder = DeezEngineRelayerHandler::new(deez_engine_receiver, rpc_servers, restart_interval);
 
     // receiver tracked as relayer_metrics.slot_receiver_len
     // downstream channel gets data that was duplicated by HealthManager
