@@ -142,7 +142,6 @@ impl DeezEngineRelayerHandler {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     loop {
-                        let start_time = Instant::now();
                         let result = Self::connect_and_run(
                             &mut deez_engine_receiver,
                             rpc_servers.clone(),
@@ -169,11 +168,6 @@ impl DeezEngineRelayerHandler {
 
                             sleep(Duration::from_secs(2)).await;
                         }
-                        // Check if we need to wait before retrying
-                        let elapsed = start_time.elapsed();
-                        if elapsed < restart_interval {
-                            sleep(restart_interval - elapsed).await;
-                        }
 
                         info!("Restarting DeezEngineRelayer");
                         deez_engine_receiver = deez_engine_receiver.resubscribe();
@@ -185,16 +179,6 @@ impl DeezEngineRelayerHandler {
         DeezEngineRelayerHandler {
             deez_engine_forwarder,
         }
-    }
-
-    async fn connect(
-        deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
-        rpc_servers: Vec<String>,
-    ) -> DeezEngineResult<()> {
-        let deez_engine_url = Self::find_closest_engine().await?;
-        info!("determined closest engine as {}", deez_engine_url);
-        let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
-        Self::start_event_loop(deez_engine_receiver, engine_stream, rpc_servers).await
     }
 
     async fn connect_and_run(
