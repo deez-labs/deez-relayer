@@ -56,6 +56,9 @@ const V3_MSG_WITH_LENGTH: &[u8; 4] = &[
 
 
 const RPC_HEARTBEAT_MSG: [u8; 2] = [0, 0];
+const STATS_MSG: [u8; 2] = [0, 1];
+
+const STATS_EPOCH_CONNECTIVITY: u16 = 0;
 
 const DEEZ_REGIONS: [&str; 3] = [
     "ny",
@@ -132,18 +135,20 @@ impl TcpReaderCodec {
 }
 
 impl DeezEngineRelayerHandler {
-    pub fn new(mut deez_engine_receiver: Receiver<BlockEnginePackets>, rpc_servers: Vec<String>) -> DeezEngineRelayerHandler {
+    pub fn new(mut deez_engine_receiver: Receiver<BlockEnginePackets>, rpc_servers: Vec<String>, restart_interval: Duration,) -> DeezEngineRelayerHandler {
         let deez_engine_forwarder = Builder::new()
             .name("deez_engine_relayer_handler_thread".into())
             .spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     loop {
-                        let result = Self::connect(
+                        let start_time = Instant::now();
+                        let result = Self::connect_and_run(
                             &mut deez_engine_receiver,
                             rpc_servers.clone(),
+                            restart_interval,
                         )
-                        .await;
+                            .await;
 
                         if let Err(e) = result {
                             match e {
@@ -161,9 +166,17 @@ impl DeezEngineRelayerHandler {
                                     error!("failed to connect to mempool engine: {:?}, retrying", e);
                                 }
                             }
-                           
+
                             sleep(Duration::from_secs(2)).await;
                         }
+                        // Check if we need to wait before retrying
+                        let elapsed = start_time.elapsed();
+                        if elapsed < restart_interval {
+                            sleep(restart_interval - elapsed).await;
+                        }
+
+                        info!("Restarting DeezEngineRelayer");
+                        deez_engine_receiver = deez_engine_receiver.resubscribe();
                     }
                 })
             })
@@ -182,6 +195,24 @@ impl DeezEngineRelayerHandler {
         info!("determined closest engine as {}", deez_engine_url);
         let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
         Self::start_event_loop(deez_engine_receiver, engine_stream, rpc_servers).await
+    }
+
+    async fn connect_and_run(
+        deez_engine_receiver: &mut Receiver<BlockEnginePackets>,
+        rpc_servers: Vec<String>,
+        restart_interval: Duration,
+    ) -> DeezEngineResult<()> {
+        let deez_engine_url = Self::find_closest_engine().await?;
+        info!("determined closest engine in connect and run as {}", deez_engine_url);
+        let engine_stream = Self::connect_to_engine(&deez_engine_url).await?;
+
+        let retry_future = sleep(restart_interval);
+        tokio::pin!(retry_future);
+
+        select! {
+            result = Self::start_event_loop(deez_engine_receiver, engine_stream, rpc_servers) => result,
+            _ = &mut retry_future => Ok(()),
+        }
     }
 
     async fn start_event_loop(
@@ -204,6 +235,9 @@ impl DeezEngineRelayerHandler {
         // SEND V3 HEADER
         let _ = Self::forward_packets(forwarder.clone(), V3_MSG_WITH_LENGTH).await;
 
+        let mut last_activity = Instant::now();
+        let activity_timeout = Duration::from_secs(300);
+
         loop {
             let cloned_forwarder = forwarder.clone();
             let cloned_error_sender = forward_error_sender.clone();
@@ -215,6 +249,7 @@ impl DeezEngineRelayerHandler {
                     match recv_result {
                         Ok(deez_engine_batches) => {
                             trace!("received deez engine batches");
+                            last_activity = Instant::now();
                             // Proceed with handling the batches as before
                             tokio::spawn(async move {
                                 for packet_batch in deez_engine_batches.banking_packet_batch.0.iter() {
@@ -269,6 +304,12 @@ impl DeezEngineRelayerHandler {
                         },
                     }
                 }
+                _ = sleep(Duration::from_secs(1)) => {
+                    if last_activity.elapsed() > activity_timeout {
+                        warn!("No activity detected for {:?}, restarting flow", activity_timeout);
+                        return Ok(());
+                    }
+                }
                 on_chain_heartbeat = line_reader.read_message() => {
                     match on_chain_heartbeat {
                         Ok(message) => {
@@ -276,6 +317,19 @@ impl DeezEngineRelayerHandler {
                                  tokio::spawn(async move {
                                         let _ = heartbeat_sender.lock().await.broadcast(message.body).await;
                                     });
+                            } else if message.header == STATS_MSG {
+                                if message.body.len() >= 4 {
+                                    let stats_type = u16::from_le_bytes([message.body[0], message.body[1]]);
+                                    if stats_type == STATS_EPOCH_CONNECTIVITY {
+                                        let epoch_connectivity_bps = u16::from_le_bytes([message.body[2], message.body[3]]);
+                                        let epoch_connectivity_pct = (epoch_connectivity_bps as f32 / 10000.0) * 100.0;
+                                        warn!("Current epoch connectivity: {:.2}%", epoch_connectivity_pct);
+                                    } else {
+                                        warn!("Unexpected format");
+                                    }
+                                } else {
+                                    warn!("Too short");
+                                }
                             }
                         },
                         _ => {}
