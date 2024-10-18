@@ -13,7 +13,7 @@ members = [
 resolver = "1"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Jito Network <support@jito.network>"]
 repository = "https://github.com/jito-foundation/jito-relayer"
 homepage = "https://jito.network/"
