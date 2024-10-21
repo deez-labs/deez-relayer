@@ -3,7 +3,7 @@
 # Useful for running on machines that might not have cargo installed but can run docker (Flatcar Linux).
 # run `./f ` to compile
 
-set -eux -o pipefaild
+set -eux -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
