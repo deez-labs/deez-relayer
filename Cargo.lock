@@ -1480,7 +1480,7 @@ checksum = "7e962a19be5cfc3f3bf6dd8f61eb50107f356ad6270fbb3ed41476571db78be5"
 
 [[package]]
 name = "deez_engine"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2662,7 +2662,7 @@ checksum = "af150ab688ff2122fcef229be89cb50dd66af9e01a4ff320cc137eecc9bacc38"
 
 [[package]]
 name = "jito-block-engine"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "cached",
  "dashmap 6.1.0",
@@ -2682,7 +2682,7 @@ dependencies = [
 
 [[package]]
 name = "jito-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "jito-protos"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bytes",
  "prost 0.12.6",
@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "jito-relayer"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2753,7 +2753,7 @@ dependencies = [
 
 [[package]]
 name = "jito-relayer-web"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum 0.5.17",
  "jito-relayer",
@@ -2767,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "jito-rpc"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "crossbeam-channel",
  "dashmap 6.1.0",
@@ -2779,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "jito-transaction-relayer"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "agave-validator",
  "bincode",
