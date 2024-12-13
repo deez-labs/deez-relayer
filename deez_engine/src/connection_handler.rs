@@ -68,22 +68,32 @@ fn is_ip_whitelisted(ip: &IpAddr, whitelist: &Arc<DashMap<IpAddr, ()>>) -> bool 
     whitelist.contains_key(ip)
 }
 
-async fn find_available_port() -> Option<u16> {
+async fn find_available_port(configured_port: Option<u16>) -> Option<u16> {
+    if let Some(port) = configured_port {
+        let addr = format!("0.0.0.0:{}", port);
+        let local_addr = format!("127.0.0.1:{}", port + 10000);
+
+        return if std::net::TcpListener::bind(addr).is_ok() &&
+            std::net::TcpListener::bind(local_addr).is_ok() {
+            Some(port)
+        } else {
+            error!("Failed to bind to configured port {} or its local port {}", port, port + 10000);
+            None
+        }
+    }
+
     let mut rng = rand::thread_rng();
     (8000..=8020).collect::<Vec<u16>>()
         .into_iter()
         .filter(|port| {
             let addr = format!("0.0.0.0:{}", port);
-            std::net::TcpListener::bind(addr).is_ok()
+            let local_addr = format!("127.0.0.1:{}", port + 10000);
+            std::net::TcpListener::bind(addr).is_ok() &&
+                std::net::TcpListener::bind(local_addr).is_ok()
         })
         .collect::<Vec<u16>>()
         .into_iter()
         .nth(rng.gen_range(0, 20))
-}
-
-async fn find_random_free_port() -> u16 {
-    let listener = TcpListener::bind("0.0.0.0:0").await.expect("Failed to bind to random port");
-    listener.local_addr().unwrap().port()
 }
 
 async fn register_port(port: u16) -> Result<(), Box<dyn Error>> {
@@ -137,7 +147,7 @@ async fn register_port(port: u16) -> Result<(), Box<dyn Error>> {
     Err("Failed to register port after maximum retry attempts".into())
 }
 
-pub async fn spawn_connection() -> Result<(), ()> {
+pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
     let whitelisted_ips = Arc::new(DashMap::new());
 
     // Initial load of whitelist
@@ -186,7 +196,7 @@ pub async fn spawn_connection() -> Result<(), ()> {
     let max_duration = Duration::from_secs(300); // 5 minutes
 
     while start_time.elapsed() < max_duration {
-        if let Some(port) = find_available_port().await {
+        if let Some(port) = find_available_port(configured_port).await {
             match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(listener) => {
                     info!("Successfully bound to port {}", port);
@@ -275,13 +285,6 @@ pub async fn spawn_connection() -> Result<(), ()> {
         }
     }
 
-    let port = find_random_free_port().await;
-    info!("Using random free port {} after exhausting retry attempts", port);
-
-    match register_port(port).await {
-        Ok(_) => info!("Successfully registered random port {} with service discovery", port),
-        Err(e) => error!("Failed to register random port with service discovery: {:?}", e)
-    }
-
-    Ok(())
+    error!("Failed to bind to a port within 5 minutes, exiting");
+    std::process::exit(1);
 }

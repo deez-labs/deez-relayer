@@ -225,6 +225,17 @@ struct Args {
     ///  Format of the file: `staked_map_id: {<pubkey>: <SOL stake amount>}
     #[arg(long, env)]
     staked_nodes_overrides: Option<PathBuf>,
+
+    #[clap(short, long, env = "CONNECTION_PORT", value_parser = validate_port)]
+    port: Option<u16>,
+}
+
+fn validate_port(port: &str) -> Result<u16, String> {
+    match port.parse::<u16>() {
+        Ok(p) if p <= 55535 => Ok(p),
+        Ok(_) => Err("Port must be ≤ 55535".to_string()),
+        Err(_) => Err("Port must be a valid number between 0 and 55535".to_string()),
+    }
 }
 
 #[derive(Debug)]
@@ -562,8 +573,8 @@ fn main() {
         )
     });
 
-    rt.spawn(async {
-        spawn_connection().await
+    rt.spawn(async move {
+        spawn_connection(args.port).await
     });
 
     rt.block_on(async {
