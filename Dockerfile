@@ -25,6 +25,8 @@ ENV HOME=/home/root
 WORKDIR $HOME/app
 COPY . .
 
+ENV CFLAGS="-march=x86-64 -mtune=generic -mpclmul"
+ENV CXXFLAGS="-march=x86-64 -mtune=generic -mpclmul"
 # cache these directories for reuse
 # see: https://docs.docker.com/build/cache/#use-the-dedicated-run-cache
 RUN --mount=type=cache,mode=0777,target=/home/root/app/target \
