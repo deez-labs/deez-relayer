@@ -1,19 +1,8 @@
-use std::{
-    collections::HashSet,
-    fs,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    ops::Range,
-    path::PathBuf,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-    thread::JoinHandle,
-    time::{Duration, Instant},
-};
-
+use std::{collections::HashSet, fs, net::{IpAddr, Ipv4Addr, SocketAddr}, ops::Range, path::PathBuf, str::FromStr, sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+}, thread, thread::JoinHandle, time::{Duration, Instant}};
+use agave_validator::admin_rpc_service::StakedNodesOverrides;
 use clap::Parser;
 use crossbeam_channel::tick;
 use dashmap::DashMap;
@@ -40,19 +29,18 @@ use jito_transaction_relayer::forwarder::start_forward_and_delay_thread;
 use jwt::{AlgorithmType, PKeyWithDigest};
 use log::{debug, error, info, warn};
 use openssl::{hash::MessageDigest, pkey::PKey};
-use solana_address_lookup_table_program::state::AddressLookupTable;
 use solana_metrics::{datapoint_error, datapoint_info};
 use solana_net_utils::multi_bind_in_range;
+use solana_program::address_lookup_table::AddressLookupTableAccount;
+use solana_program::address_lookup_table::state::AddressLookupTable;
 use solana_sdk::{
-    address_lookup_table_account::AddressLookupTableAccount,
     pubkey::Pubkey,
     signature::{read_keypair_file, Signer},
 };
-use solana_validator::admin_rpc_service::StakedNodesOverrides;
 use tikv_jemallocator::Jemalloc;
 use tokio::{runtime::Builder, signal, sync::broadcast::channel};
 use tonic::transport::Server;
-
+use deez_engine::connection_handler::{spawn_connection};
 // no-op change to test ci
 
 #[global_allocator]
@@ -242,8 +230,6 @@ struct Args {
 #[derive(Debug)]
 struct Sockets {
     tpu_sockets: TpuSockets,
-    tpu_ip: IpAddr,
-    tpu_fwd_ip: IpAddr,
 }
 
 fn get_sockets(args: &Args) -> Sockets {
@@ -303,8 +289,6 @@ fn get_sockets(args: &Args) -> Sockets {
             transactions_quic_sockets: tpu_quic_sockets,
             transactions_forwards_quic_sockets: tpu_fwd_quic_sockets,
         },
-        tpu_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        tpu_fwd_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
     }
 }
 
@@ -441,8 +425,6 @@ fn main() {
         sockets.tpu_sockets,
         &exit,
         &keypair,
-        &sockets.tpu_ip,
-        &sockets.tpu_fwd_ip,
         &rpc_load_balancer,
         args.max_unstaked_quic_connections,
         args.max_staked_quic_connections,
@@ -474,18 +456,24 @@ fn main() {
     );
 
     let is_connected_to_block_engine = Arc::new(AtomicBool::new(false));
-    let block_engine_config = if !args.disable_mempool && args.block_engine_url.is_some() {
-        let block_engine_url = args.block_engine_url.unwrap();
-        let auth_service_url = args
-            .block_engine_auth_service_url
-            .unwrap_or(block_engine_url.clone());
+
+    let block_engine_url = if !args.disable_mempool && args.block_engine_url.is_some() {
+        Some(args.block_engine_url.unwrap())
+    } else {
+        None
+    };
+
+    let block_engine_config = if let Some(url) = &block_engine_url {
         Some(BlockEngineConfig {
-            block_engine_url,
-            auth_service_url,
+            block_engine_url: url.clone(),
+            auth_service_url: args
+                .block_engine_auth_service_url
+                .unwrap_or_else(|| url.clone()),
         })
     } else {
         None
     };
+
     let block_engine_forwarder = BlockEngineRelayerHandler::new(
         block_engine_config,
         block_engine_receiver,
@@ -572,6 +560,10 @@ fn main() {
             MAX_BUFFERED_REQUESTS,
             REQUESTS_PER_SECOND,
         )
+    });
+
+    rt.spawn(async {
+        spawn_connection().await
     });
 
     rt.block_on(async {
