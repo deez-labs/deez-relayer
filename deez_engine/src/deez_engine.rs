@@ -60,10 +60,11 @@ const STATS_MSG: [u8; 2] = [0, 1];
 
 const STATS_EPOCH_CONNECTIVITY: u16 = 0;
 
-const DEEZ_REGIONS: [&str; 3] = [
+const DEEZ_REGIONS: [&str; 4] = [
     "ny",
     "de",
-    "cali",
+    "slc",
+    "tokyo"
 ];
 const DEEZ_ENGINE_URL: &str = ".engine.v2.deez.wtf:8374";
 

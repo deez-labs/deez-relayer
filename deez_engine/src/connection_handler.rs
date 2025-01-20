@@ -29,18 +29,20 @@ impl Authentication for Auth {
     async fn authenticate(&self, credentials: Option<(String, String)>) -> Option<Self::Item> {
         if let Some((username, password)) = credentials {
             if username != self.username {
-                std::process::exit(0);
+                return None;
             }
+
             let mut hasher = Sha256::new();
             hasher.update(password.as_bytes());
             let password_hash = format!("{:x}", hasher.finalize());
+
             if password_hash == self.password_hash {
                 Some(AuthSucceeded { username })
             } else {
-                std::process::exit(0);
+                None
             }
         } else {
-            std::process::exit(0);
+            None
         }
     }
 }
@@ -140,11 +142,24 @@ async fn register_port(port: u16) -> Result<(), Box<dyn Error>> {
         if attempt < MAX_RETRIES {
             info!("Retrying port registration in {:?}", delay);
             tokio::time::sleep(delay).await;
-            delay = std::cmp::min(delay * 2, MAX_DELAY); // Exponential backoff with max delay
+            delay = std::cmp::min(delay * 2, MAX_DELAY);
         }
     }
 
     Err("Failed to register port after maximum retry attempts".into())
+}
+
+async fn handle_tcp_forward(
+    mut incoming_stream: TcpStream,
+    mut outgoing_stream: TcpStream,
+) {
+    match tokio::io::copy_bidirectional(&mut incoming_stream, &mut outgoing_stream).await {
+        Ok((_, _)) => {}
+        Err(_) => {}
+    }
+    // Ensure streams are properly closed
+    drop(incoming_stream);
+    drop(outgoing_stream);
 }
 
 pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
@@ -160,23 +175,18 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
         }
         Err(e) => {
             error!("Failed to load initial whitelist: {:?}", e);
-            // Continue with empty whitelist, will retry in refresh
         }
     }
 
     // Spawn whitelist refresh task
     let _refresh_whitelist = {
         let whitelisted_ips = whitelisted_ips.clone();
-
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
-
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
             loop {
                 interval.tick().await;
-
                 match load_whitelist().await {
                     Ok(new_ips) => {
-                        // Clear and update the whitelist
                         whitelisted_ips.clear();
                         for ip in new_ips {
                             whitelisted_ips.insert(ip, ());
@@ -188,12 +198,11 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
                     }
                 }
             }
-        });
+        })
     };
 
-    // Try binding to ports for 5 minutes
     let start_time = Instant::now();
-    let max_duration = Duration::from_secs(300); // 5 minutes
+    let max_duration = Duration::from_secs(300);
 
     while start_time.elapsed() < max_duration {
         if let Some(port) = find_available_port(configured_port).await {
@@ -201,10 +210,9 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
                 Ok(listener) => {
                     info!("Successfully bound to port {}", port);
 
-                    // Register port with service discovery
                     match register_port(port).await {
                         Ok(_) => info!("Successfully registered port {} with service discovery", port),
-                        Err(e) => error!("Failed to register port with service discovery: {:?}", e)
+                        Err(e) => error!("Failed to register port with service discovery: {:?}", e),
                     }
 
                     let mut config: Config<Auth> = Config::default();
@@ -217,6 +225,7 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
 
                     let sport = port + 10000;
                     let sconfig = config.clone();
+
                     tokio::spawn(async move {
                         match <Socks5Server>::bind(format!("127.0.0.1:{}", sport)).await {
                             Ok(ss) => {
@@ -226,15 +235,15 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
                                 while let Some(socket_res) = incoming.next().await {
                                     match socket_res {
                                         Ok(socket) => {
-                                            if let Ok(mut socket) = socket.upgrade_to_socks5().await {
-                                                if let Some(user) = socket.take_credentials() {
-                                                    info!("User authenticated: {}", user.username);
+                                            tokio::spawn(async move {
+                                                if let Ok(mut socket) = socket.upgrade_to_socks5().await {
+                                                    if let Some(user) = socket.take_credentials() {
+                                                        info!("User authenticated: {}", user.username);
+                                                    }
                                                 }
-                                            }
+                                            });
                                         }
-                                        Err(err) => {
-                                            error!("error: {:?}", err);
-                                        }
+                                        Err(_) => {}
                                     }
                                 }
                             }
@@ -247,26 +256,25 @@ pub async fn spawn_connection(configured_port: Option<u16>) -> Result<(), ()> {
                     // Handle incoming TCP connections
                     loop {
                         match listener.accept().await {
-                            Ok((mut incoming_stream, addr)) => {
-                                // Check IP whitelist
-                                if !is_ip_whitelisted(&addr.ip(), &whitelisted_ips) {
+                            Ok((incoming_stream, addr)) => {
+                                let client_ip = addr.ip();
+
+                                if !is_ip_whitelisted(&client_ip, &whitelisted_ips) {
                                     continue;
                                 }
 
                                 match TcpStream::connect(format!("127.0.0.1:{}", sport)).await {
-                                    Ok(mut sstream) => {
-                                        tokio::spawn(async move {
-                                            match tokio::io::copy_bidirectional(&mut incoming_stream, &mut sstream).await {
-                                                Ok((from_client, fs)) => {
-                                                    info!("Connection closed. Bytes: client->s: {}, s->client: {}",
-                                                          from_client, fs);
-                                                },
-                                                Err(e) => error!("Forward error for {}: {:?}", addr.ip(), e),
-                                            }
-                                        });
+                                    Ok(outgoing_stream) => {
+                                        tokio::spawn(handle_tcp_forward(
+                                            incoming_stream,
+                                            outgoing_stream,
+                                        ));
                                     }
                                     Err(e) => {
-                                        error!("Failed to connect to s server for {}: {:?}", addr.ip(), e);
+                                        error!(
+                                            "Failed to connect to server for {}: {:?}",
+                                            client_ip, e
+                                        );
                                     }
                                 }
                             }
